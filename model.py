@@ -5,11 +5,12 @@ Projection: projects visual embeddings from DINO's into text embedding space usi
 CLIP: provides text embeddings from the captions, projects visual embeddings from DINO's into text embedding space
 """
 
-import torch
+import torch, os
 import timm
-from transformers import CLIPTokenizer, CLIPModel
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
+import torch.nn as nn
+import numpy as np
+import torch.nn.functional as F
+from cfg import model_cache_path
 
 
 class ProjectionLayer(nn.Module):
@@ -20,6 +21,7 @@ class ProjectionLayer(nn.Module):
             nn.Tanh(),
             nn.Linear(proj_dim, out_dim),
         )
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
     def contrastive_loss(self, scores):
         # cosine similarity as logits
@@ -48,18 +50,27 @@ class ProjectionLayer(nn.Module):
             # visual_embedding == weighted averaged by the text similarities
             projected = (projected * sims.unsqueeze(dim=-1)).mean(dim=1)
             sims = textual_embedding @ projected.transpose(1, 0)
+
             return projected, self.contrastive_loss(sims)
         else:
             return projected
 
 
 class DINO(nn.Module):
-    def __init__(self, patch_size=32):
+    def __init__(self):
+        super().__init__()
         # Load DINO ViT model
-        self.patch_size = patch_size
-        self.dino = timm.create_model(
-            f"vit_base_patch{self.patch_size}_224_dinov2", pretrained=True
-        )
+        if os.path.exists(os.path.join(model_cache_path, "dinov2.pth")):
+            self.dino = torch.load(
+                os.path.join(model_cache_path, "dinov2.pth"), weights_only=False
+            )["model"]
+        else:
+            self.dino = timm.create_model(f"vit_base_patch14_dinov2", pretrained=True)
+            torch.save(
+                {"model": self.dino.cpu()}, os.path.join(model_cache_path, "dinov2.pth")
+            )
+
+        self.register_hook()
         self.projection_layer = ProjectionLayer()
 
     def register_hook(self):
@@ -78,14 +89,14 @@ class DINO(nn.Module):
 
     def forward(self, image, text_embeddings):
         # Forward pass through DINO model
-        dino_features = self.dino.forward_features(image)
-        print(dino_features.shape)
+        with torch.no_grad():
+            dino_features = self.dino.forward_features(image)
         dino_features = (dino_features.unsqueeze(1) * self.attention_weights).mean(
             dim=2
         )  # NxH visual representations
 
         # Project DINO features into CLIP text embedding space
-        return self.projection_layer(dino_features, text_embeddings)
+        return self.projection_layer(dino_features, text_embeddings.squeeze(1))
 
 
 def get_dino_attention_map(model, image_tensor, head=0):
