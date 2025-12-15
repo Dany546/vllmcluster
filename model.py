@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from cfg import device, model_cache_path
+from transformers import CLIPModel, CLIPTokenizer
 
 
 class ProjectionLayer(nn.Module):
@@ -58,6 +59,20 @@ class ProjectionLayer(nn.Module):
             return projected, self.contrastive_loss(sims)
         else:
             return projected
+
+
+class CLIP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        self.encoder = CLIPModel.from_pretrained(f"openai/clip-vit-base-patch16").to(
+            device
+        )
+
+    def forward(self, images):
+        inputs = self.processor(images=images, return_tensors="pt")
+        projected = self.encoder.get_image_features(**inputs)
+        return projected
 
 
 class DINO(nn.Module):
