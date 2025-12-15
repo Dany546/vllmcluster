@@ -5,12 +5,15 @@ Projection: projects visual embeddings from DINO's into text embedding space usi
 CLIP: provides text embeddings from the captions, projects visual embeddings from DINO's into text embedding space
 """
 
-import torch, os
-import timm
-import torch.nn as nn
+import os
+from typing import Literal as Choice
+
 import numpy as np
+import timm
+import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from cfg import model_cache_path
+from cfg import device, model_cache_path
 
 
 class ProjectionLayer(nn.Module):
@@ -22,11 +25,12 @@ class ProjectionLayer(nn.Module):
             nn.Linear(proj_dim, out_dim),
         )
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.logit_scale.requires_grad = False
 
     def contrastive_loss(self, scores):
         # cosine similarity as logits
-        logit_scale = self.logit_scale.exp()
-        logits_per_image = logit_scale * scores
+        logit_scale = self.logit_scale.exp()  # logit_scale *
+        logits_per_image = scores * logit_scale
         logits_per_text = logits_per_image.t()
 
         # compute bidirectional CE loss
@@ -38,7 +42,7 @@ class ProjectionLayer(nn.Module):
             F.cross_entropy(logits_per_image, labels)
             + F.cross_entropy(logits_per_text, labels)
         ) / 2
-        return loss / scores.shape[0] ** 2  # normalization by the batch s
+        return loss  # / scores.shape[0] ** 2  # normalization by the batch s
 
     def forward(self, visual_embedding, textual_embedding):
         projected = self.projection(visual_embedding)  # still NxHxD
@@ -48,7 +52,7 @@ class ProjectionLayer(nn.Module):
             )  # similarities matrices for each head
             sims = sims.softmax(dim=-1)  # normalizes
             # visual_embedding == weighted averaged by the text similarities
-            projected = (projected * sims.unsqueeze(dim=-1)).mean(dim=1)
+            projected = (projected * sims.unsqueeze(dim=-1)).sum(dim=1)
             sims = textual_embedding @ projected.transpose(1, 0)
 
             return projected, self.contrastive_loss(sims)
@@ -87,10 +91,12 @@ class DINO(nn.Module):
     def get_visual_embeddings(self, feature, attention_weights):
         return None
 
-    def forward(self, image, text_embeddings):
+    def forward(self, image, labels, text_embeddings=None):
         # Forward pass through DINO model
         with torch.no_grad():
             dino_features = self.dino.forward_features(image)
+            return dino_features[:, 0], [[0, 0, 0]]
+
         dino_features = (dino_features.unsqueeze(1) * self.attention_weights).mean(
             dim=2
         )  # NxH visual representations
