@@ -30,8 +30,9 @@ def KNN(args):
         wandb_table = [[] * 3]
         # Start a new wandb run per model
         logger.debug(table)
-        ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
-        distances = load_distances(table.replace("embeddings", "distances"))
+        table_name = table.split("/")[-1].split(".")[0]
+        ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table_name)
+        distances = load_distances(table_name.replace("embeddings", "distances"))
 
         indices = np.arange(len(distances))
         train_idx, test_idx = train_test_split(indices, test_size=0.2, random_state=42)
