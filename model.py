@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from cfg import device, model_cache_path
-from transformers import CLIPModel, CLIPTokenizer
+from transformers import CLIPModel, CLIPProcessor, CLIPTokenizer
 
 
 class ProjectionLayer(nn.Module):
@@ -65,13 +65,12 @@ class CLIP(nn.Module):
     def __init__(self):
         super().__init__()
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
-        self.encoder = CLIPModel.from_pretrained(f"openai/clip-vit-base-patch16").to(
-            device
-        )
+        self.encoder = CLIPModel.from_pretrained(f"openai/clip-vit-base-patch16")
 
     def forward(self, images):
-        inputs = self.processor(images=images, return_tensors="pt")
-        projected = self.encoder.get_image_features(**inputs)
+        inputs = self.processor(images=images, return_tensors="pt", do_rescale=False)
+        pixel_values = inputs["pixel_values"].to(images.device)
+        projected = self.encoder.get_image_features(pixel_values=pixel_values)
         return projected
 
 
@@ -106,11 +105,11 @@ class DINO(nn.Module):
     def get_visual_embeddings(self, feature, attention_weights):
         return None
 
-    def forward(self, image, labels, text_embeddings=None):
+    def forward(self, image, labels=None, text_embeddings=None):
         # Forward pass through DINO model
         with torch.no_grad():
             dino_features = self.dino.forward_features(image)
-            return dino_features[:, 0], [[0, 0, 0]]
+            return dino_features[:, 0]  # , [[0, 0, 0]]
 
         dino_features = (dino_features.unsqueeze(1) * self.attention_weights).mean(
             dim=2

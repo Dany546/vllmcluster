@@ -4,13 +4,19 @@ import os
 import sqlite3
 from collections import defaultdict
 
+import ipywidgets as W
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import seaborn as sns
+from IPython.display import display
 from matplotlib.colors import ListedColormap
+from plotly.subplots import make_subplots
 from sklearn.manifold import TSNE
 from umap import UMAP  # GPU versions
+from utils import dict_to_filename, get_lookups, table_exists
 
 import wandb
 
@@ -28,13 +34,17 @@ def load_embeddings(db_path):
     # )
     conn.close()
     return (
-        df["ids"].values,
+        df["img_id"].values,
         np.concatenate(df["embedding"].values),
-        list(*df["error"].values),
+        df["hit_freq"].values,
+        df["mean_iou"].values,
+        df["mean_conf"].values,
+        df["flag_cat"].values,
+        df["flag_supercat"].values,
     )
 
 
-def log_plot_plotly(embeddings, labels, label_names, sizes, title, run):
+def log_plot(embeddings, labels, label_names, sizes, title, run):
     # Keep reference to scatter for colorbar
     scatter = None
     fig, axes = plt.subplots(1, 2, figsize=(18, 6), dpi=300)
@@ -60,114 +70,28 @@ def log_plot_plotly(embeddings, labels, label_names, sizes, title, run):
     plt.close()
 
 
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
-
-def get_colormap(n_classes, cmap_name="husl"):
-    """Generate colors using Set3, husl, or viridis."""
-    if cmap_name == "Set3":
-        base_cmap = plt.get_cmap("Set3")
-        base_colors = base_cmap.colors
-        colors = (base_colors * (n_classes // len(base_colors) + 1))[:n_classes]
-    elif cmap_name == "husl":
-        colors = sns.color_palette("husl", n_classes)
-    elif cmap_name == "viridis":
-        cmap = plt.get_cmap("viridis")
-        colors = [cmap(i / n_classes) for i in range(n_classes)]
+def get_colormap(n, palette="husl"):
+    """
+    Return a list of n distinct colors.
+    Uses Plotly qualitative palettes.
+    """
+    if palette.lower() in ["husl", "set2", "pastel", "bold"]:
+        base = (
+            px.colors.qualitative.Set2
+            if palette.lower() == "set2"
+            else px.colors.qualitative.Bold
+        )
+    elif palette.lower() == "set3":
+        base = px.colors.qualitative.Set3
     else:
-        colors = sns.color_palette("husl", n_classes)
-
-    return [mcolors.rgb2hex(c[:3]) for c in colors]
-
-
-def add_threshold_input(fig, encoding_name, encoding_info, embeddings, traces):
-    """
-    Adds a text input box (HTML) + Apply button for thresholding continuous variables.
-    """
-    # Initial threshold
-    init_val = encoding_info["min"]
-
-    # Add HTML input element (Plotly supports foreign HTML in annotations)
-    fig.add_annotation(
-        dict(
-            x=0.01,
-            y=1.10,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            align="left",
-            text=(
-                f"<b>{encoding_name} threshold:</b> "
-                f"<input id='thr_input' type='number' value='{init_val}' "
-                f"step='0.01' style='width:80px;'>"
-            ),
-        )
-    )
-
-    # Create button that reads JS from the HTML input
-    fig.update_layout(
-        updatemenus=fig.layout.updatemenus
-        + (
-            [
-                dict(
-                    type="buttons",
-                    direction="right",
-                    x=0.35,
-                    y=1.10,
-                    xanchor="left",
-                    yanchor="middle",
-                    showactive=False,
-                    buttons=[
-                        dict(
-                            label="Apply threshold",
-                            method="update",
-                            args=[{}, {}],  # We fill via JS hack below
-                            execute=True,
-                        )
-                    ],
-                )
-            ]
-        )
-    )
-
-    # JS callback (Plotly hack)
-    # This injects JS that replaces x,y,colors based on threshold
-    fig.add_annotation(
-        dict(
-            x=0,
-            y=0,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            text=(
-                "<script>"
-                "document.querySelectorAll('g.button').forEach(btn => {"
-                "  btn.addEventListener('click', () => {"
-                f"    let thr = parseFloat(document.getElementById('thr_input').value);"
-                "    let gd = document.querySelector('.js-plotly-plot');"
-                "    let d = gd.data;"
-                "    for (let i = 0; i < d.length; i++) {"
-                f"      if (i >= 0 && i < {len(traces)}) {{"
-                f"        let vals = {encoding_info['values'].tolist()};"
-                f"        let emb_list = {[emb.tolist() for emb in embeddings]};"
-                "        // Find trace-specific mask"
-                "      }"
-                "    }"
-                "    Plotly.react(gd, d, gd.layout);"
-                "  });"
-                "});"
-                "</script>"
-            ),
-        )
-    )
+        base = px.colors.qualitative.Dark24
+    colors = []
+    while len(colors) < n:
+        colors.extend(base)
+    return colors[:n]
 
 
-def log_plotly(
+def log_plot_plotly(
     df,
     umap_col=["umap_x", "umap_y"],
     tsne_col=["tsne_x", "tsne_y"],
@@ -175,260 +99,448 @@ def log_plotly(
     superclass_cols=None,
     continuous_cols=None,
     title="Embedding Visualization",
-    run=None,
 ):
     """
-    Create interactive embedding plot from DataFrame with one-hot encoded categories.
+    Creates interactive embedding visualization with togglable legend.
 
-    Args:
-        df: DataFrame with embeddings and labels
-        umap_col: List of [x_col, y_col] for UMAP coordinates
-        tsne_col: List of [x_col, y_col] for t-SNE coordinates
-        class_cols: List of column names for one-hot encoded classes
-        superclass_cols: List of column names for one-hot encoded superclasses (optional)
-        continuous_cols: List of column names for continuous variables (optional)
-        title: Plot title
+    Key behavior:
+    - When a class is toggled OFF via legend: shows points in GREY with SMALL size
+    - When a class is toggled ON via legend: shows points in COLOR with NORMAL size
+    - Background layer always visible in light grey
+
+    Parameters:
+    -----------
+    df : DataFrame
+        Data containing embeddings and class/continuous variables
+    umap_col : list
+        Column names for UMAP coordinates [x, y]
+    tsne_col : list
+        Column names for t-SNE coordinates [x, y]
+    class_cols : list, optional
+        Column names for one-hot encoded classes
+    superclass_cols : list, optional
+        Column names for one-hot encoded superclasses
+    continuous_cols : list, optional
+        Column names for continuous variables (e.g., ["error", "loss"])
+    title : str
+        Plot title
+    run : wandb.run, optional
+        Wandb run object for logging
+
+    Returns:
+    --------
+    fig : plotly.graph_objects.Figure
     """
-    # Extract data
+
+    # ============================================
+    # CONFIGURATION - Modify these to customize appearance
+    # ============================================
+    FIGURE_HEIGHT = 600
+    FIGURE_WIDTH = 1200
+
+    # Point sizes
+    ACTIVE_POINT_SIZE = 10  # Size when class is toggled ON
+    INACTIVE_POINT_SIZE = 4  # Size when class is toggled OFF
+    BACKGROUND_POINT_SIZE = 4  # Size for permanent background
+
+    # Opacity
+    ACTIVE_OPACITY = 0.9  # Opacity when toggled ON
+    INACTIVE_OPACITY = 0.3  # Opacity when toggled OFF (grey)
+    BACKGROUND_OPACITY = 0.25  # Opacity for permanent background
+
+    # Colors
+    INACTIVE_COLOR = "grey"  # Color when toggled OFF
+    BACKGROUND_COLOR = "grey"
+
+    # ============================================
+    # VALIDATION
+    # ============================================
+    if df is None or len(df) == 0:
+        raise ValueError("DataFrame is empty")
+
+    for col in umap_col + tsne_col:
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in DataFrame")
+
+    # ============================================
+    # DATA PREPARATION
+    # ============================================
     umap_embedding = df[umap_col].values
     tsne_embedding = df[tsne_col].values
     embeddings = [umap_embedding, tsne_embedding]
+    emb_names = ["UMAP", "t-SNE"]
 
-    # Fixed point size
-    norm_sizes = np.full(len(df), 2)
+    norm_sizes_active = np.full(len(df), ACTIVE_POINT_SIZE)
+    norm_sizes_inactive = np.full(len(df), INACTIVE_POINT_SIZE)
+    norm_sizes_bg = np.full(len(df), BACKGROUND_POINT_SIZE)
 
-    # Prepare color encodings
-    color_options = {}
+    # ============================================
+    # FIGURE CREATION
+    # ============================================
+    fig = make_subplots(
+        rows=1, cols=2, subplot_titles=emb_names, horizontal_spacing=0.1
+    )
 
-    # 1. Superclasses (Set3 colormap)
-    if superclass_cols is not None:
-        # Convert one-hot to categorical
-        superclass_matrix = df[superclass_cols].values
-        superclasses = np.argmax(superclass_matrix, axis=1)
-        superclass_names = superclass_cols
-        superclass_colors = get_colormap(len(superclass_names), "Set3")
-        color_options["superclasses"] = {
-            "values": superclasses,
-            "names": superclass_names,
-            "colors": superclass_colors,
-            "type": "categorical",
-        }
+    # Track trace organization
+    background_idxs = []
+    encoding_groups = {}
 
-    # 2. Classes (husl colormap)
+    # ============================================
+    # ALWAYS-VISIBLE BACKGROUND LAYER
+    # Shows all points in grey - never hidden
+    # ============================================
+    for idx, embedding in enumerate(embeddings, 1):
+        fig.add_trace(
+            go.Scatter(
+                x=embedding[:, 0],
+                y=embedding[:, 1],
+                mode="markers",
+                marker=dict(
+                    size=norm_sizes_bg,
+                    color=BACKGROUND_COLOR,
+                    opacity=BACKGROUND_OPACITY,
+                    line=dict(width=0),
+                ),
+                name="Background",
+                showlegend=False,
+                hoverinfo="skip",
+                visible=True,  # Always visible
+            ),
+            row=1,
+            col=idx,
+        )
+        background_idxs.append(len(fig.data) - 1)
+
+    # ============================================
+    # CLASSES - Categorical with toggle behavior
+    # Each class gets TWO traces per subplot:
+    #   1. Active trace (colored, normal size) - visible by default
+    #   2. Inactive trace (grey, small size) - hidden by default
+    # Plotly's legend groups them so clicking toggles between active/inactive
+    # ============================================
     if class_cols is not None:
-        # Convert one-hot to categorical
+        if not all(col in df.columns for col in class_cols):
+            raise ValueError("Some class columns not found in DataFrame")
+
         class_matrix = df[class_cols].values
         classes = np.argmax(class_matrix, axis=1)
         class_names = class_cols
         class_colors = get_colormap(len(class_names), "husl")
-        color_options["classes"] = {
-            "values": classes,
-            "names": class_names,
-            "colors": class_colors,
-            "type": "categorical",
-        }
+        encoding_groups["classes"] = []
 
-    # 3. Continuous variables (viridis colormap)
-    if continuous_cols is not None:
-        for col in continuous_cols:
-            if col in df.columns:
-                color_options[col] = {
-                    "values": df[col].values,
-                    "names": None,
-                    "colors": None,
-                    "type": "continuous",
-                    "colorscale": "Viridis",
-                    "min": df[col].min(),
-                    "max": df[col].max(),
-                }
+        for idx, embedding in enumerate(embeddings, 1):
+            for cat_idx, cat_name in enumerate(class_names):
+                mask = classes == cat_idx
 
-    # Create figure
-    fig = make_subplots(
-        rows=1, cols=2, subplot_titles=["UMAP", "t-SNE"], horizontal_spacing=0.1
-    )
-
-    # Store all traces for each color encoding
-    traces_by_encoding = {}
-
-    for encoding_name, encoding_info in color_options.items():
-        traces = []
-
-        if encoding_info["type"] == "categorical":
-            # Categorical encoding - separate trace per category for toggle functionality
-            for idx, (embedding, emb_title) in enumerate(
-                zip(embeddings, ["UMAP", "t-SNE"]), 1
-            ):
-                for cat_idx, cat_name in enumerate(encoding_info["names"]):
-                    mask = encoding_info["values"] == cat_idx
-                    trace = go.Scatter(
+                # ACTIVE trace (colored, shown when toggled ON)
+                fig.add_trace(
+                    go.Scatter(
                         x=embedding[mask, 0],
                         y=embedding[mask, 1],
                         mode="markers",
                         marker=dict(
-                            size=norm_sizes[mask],
-                            color=encoding_info["colors"][cat_idx],
-                            opacity=0.7,
+                            size=norm_sizes_active[mask],
+                            color=class_colors[cat_idx],
+                            opacity=ACTIVE_OPACITY,
                             line=dict(width=0.5, color="white"),
-                            sizemode="diameter",
+                        ),
+                        name=cat_name,
+                        legendgroup=cat_name,  # Groups active/inactive together
+                        showlegend=(idx == 1),  # Show legend only for first subplot
+                        visible=True,  # Initially active
+                    ),
+                    row=1,
+                    col=idx,
+                )
+                encoding_groups["classes"].append(len(fig.data) - 1)
+
+                # INACTIVE trace (grey, shown when toggled OFF)
+                # fig.add_trace(
+                #     go.Scatter(
+                #         x=embedding[mask, 0],
+                #         y=embedding[mask, 1],
+                #         mode="markers",
+                #         marker=dict(
+                #             size=norm_sizes_inactive[mask],
+                #             color=INACTIVE_COLOR,
+                #             opacity=INACTIVE_OPACITY,
+                #             line=dict(width=0),
+                #         ),
+                #         name=cat_name,
+                #         legendgroup=cat_name,  # Same group as active
+                #         showlegend=False,  # Don't show in legend (controlled by active trace)
+                #         visible="legendonly",  # Hidden until active is toggled off
+                #     ),
+                #     row=1,
+                #     col=idx,
+                # )
+                # encoding_groups["classes"].append(len(fig.data) - 1)
+
+    # ============================================
+    # SUPERCLASSES - Same dual-trace pattern as classes
+    # ============================================
+    if superclass_cols is not None:
+        if not all(col in df.columns for col in superclass_cols):
+            raise ValueError("Some superclass columns not found in DataFrame")
+
+        superclass_matrix = df[superclass_cols].values
+        superclasses = np.argmax(superclass_matrix, axis=1)
+        superclass_names = superclass_cols
+        superclass_colors = get_colormap(len(superclass_names), "Set3")
+        encoding_groups["superclasses"] = []
+
+        for idx, embedding in enumerate(embeddings, 1):
+            for cat_idx, cat_name in enumerate(superclass_names):
+                mask = superclasses == cat_idx
+
+                # ACTIVE trace
+                fig.add_trace(
+                    go.Scatter(
+                        x=embedding[mask, 0],
+                        y=embedding[mask, 1],
+                        mode="markers",
+                        marker=dict(
+                            size=norm_sizes_active[mask],
+                            color=superclass_colors[cat_idx],
+                            opacity=ACTIVE_OPACITY,
+                            line=dict(width=0.5, color="white"),
                         ),
                         name=cat_name,
                         legendgroup=cat_name,
                         showlegend=(idx == 1),
-                        hovertemplate=f"<b>{cat_name}</b><br>x: %{{x:.2f}}<br>y: %{{y:.2f}}<extra></extra>",
-                        visible=(encoding_name == "classes"),
-                    )
-                    traces.append(trace)
-                    fig.add_trace(trace, row=1, col=idx)
-
-        else:
-            # Continuous encoding
-            for idx, (embedding, emb_title) in enumerate(
-                zip(embeddings, ["UMAP", "t-SNE"]), 1
-            ):
-                trace = go.Scatter(
-                    x=embedding[:, 0],
-                    y=embedding[:, 1],
-                    mode="markers",
-                    marker=dict(
-                        size=norm_sizes,
-                        color=encoding_info["values"],
-                        colorscale=encoding_info["colorscale"],
-                        opacity=0.7,
-                        line=dict(width=0.5, color="white"),
-                        sizemode="diameter",
-                        showscale=(idx == 2),
-                        colorbar=dict(title=encoding_name),
-                        cmin=encoding_info["min"],
-                        cmax=encoding_info["max"],
+                        visible=False,  # Hidden initially (classes shown by default)
                     ),
-                    name=encoding_name,
-                    showlegend=False,
-                    hovertemplate=f"<b>{encoding_name}: %{{marker.color:.2f}}</b><br>x: %{{x:.2f}}<br>y: %{{y:.2f}}<extra></extra>",
-                    visible=(encoding_name == "classes"),
-                    customdata=np.column_stack([embedding, encoding_info["values"]]),
+                    row=1,
+                    col=idx,
                 )
-                traces.append(trace)
-                fig.add_trace(trace, row=1, col=idx)
+                encoding_groups["superclasses"].append(len(fig.data) - 1)
 
-        traces_by_encoding[encoding_name] = (traces, encoding_info)
+                # INACTIVE trace
+                # fig.add_trace(
+                #     go.Scatter(
+                #         x=embedding[mask, 0],
+                #         y=embedding[mask, 1],
+                #         mode="markers",
+                #         marker=dict(
+                #             size=norm_sizes_inactive[mask],
+                #             color=INACTIVE_COLOR,
+                #             opacity=INACTIVE_OPACITY,
+                #             line=dict(width=0),
+                #         ),
+                #         name=cat_name,
+                #         legendgroup=cat_name,
+                #         showlegend=False,
+                #         visible=False,
+                #     ),
+                #     row=1,
+                #     col=idx,
+                # )
+                # encoding_groups["superclasses"].append(len(fig.data) - 1)
 
-    # Create color encoding dropdown buttons
-    color_buttons = []
+    # ============================================
+    # CONTINUOUS VARIABLES - Single colormap trace per variable
+    # No toggling behavior - shows all points with continuous color scale
+    # ============================================
+    if continuous_cols is not None:
+        for col in continuous_cols:
+            if col not in df.columns:
+                raise ValueError(f"Continuous column '{col}' not found in DataFrame")
 
-    for encoding_name, (traces, encoding_info) in traces_by_encoding.items():
-        visible_list = []
-        for trace in fig.data:
-            visible_list.append(trace in traces)
-        if encoding_info["type"] == "continuous":
-            add_threshold_input(fig, encoding_name, encoding_info, embeddings, traces)
-        color_buttons.append(
-            dict(
-                label=encoding_name.replace("_", " ").title(),
-                method="update",
-                args=[
-                    {"visible": visible_list},
-                    {
-                        "showlegend": encoding_info["type"] == "categorical",
-                    },
-                ],
-            )
+            values = df[col].values
+            encoding_groups[col] = []
+
+            for idx, embedding in enumerate(embeddings, 1):
+                fig.add_trace(
+                    go.Scatter(
+                        x=embedding[:, 0],
+                        y=embedding[:, 1],
+                        mode="markers",
+                        marker=dict(
+                            size=norm_sizes_active,
+                            color=values,
+                            colorscale="Viridis",
+                            opacity=ACTIVE_OPACITY,
+                            line=dict(width=0.5, color="white"),
+                            showscale=(idx == 1),  # Show colorbar on first subplot
+                            colorbar=dict(title=col),
+                            cmin=float(np.nanmin(values)),
+                            cmax=float(np.nanmax(values)),
+                        ),
+                        name=col,
+                        showlegend=False,
+                        visible=False,  # Hidden initially
+                    ),
+                    row=1,
+                    col=idx,
+                )
+                encoding_groups[col].append(len(fig.data) - 1)
+
+    # ============================================
+    # DROPDOWN MENU - Switch between encoding types
+    # Each button shows/hides appropriate traces and controls legend visibility
+    # ============================================
+    total_traces = len(fig.data)
+
+    def button_for(group_name, showlegend_on=True):
+        """
+        Creates a dropdown button that shows only the selected encoding type.
+
+        Parameters:
+        -----------
+        group_name : str
+            Name of encoding group (e.g., "classes", "superclasses", "error")
+        showlegend_on : bool
+            Whether to show legend for this encoding type
+        """
+        visible = [False] * total_traces
+
+        # Background always visible
+        for bi in background_idxs:
+            visible[bi] = True
+
+        # Show selected encoding group
+        for gi in encoding_groups.get(group_name, []):
+            visible[gi] = True
+
+        # Update legend title based on encoding type
+        if showlegend_on:
+            legend_title = f"{group_name.replace('_', ' ').title()}"
+        else:
+            legend_title = ""
+
+        return dict(
+            label=group_name.replace("_", " ").title(),
+            method="update",
+            args=[
+                {"visible": visible},
+                {"showlegend": showlegend_on, "legend.title.text": legend_title},
+            ],
         )
 
-    fig.update_layout(
-        height=600,
-        width=1200,
-        hovermode="closest",
-        title=title,
-        legend=dict(title="Categories (click to toggle)", itemsizing="constant"),
-        updatemenus=[
-            dict(
-                buttons=color_buttons,
-                direction="down",
-                pad={"r": 10, "t": 10},
-                showactive=True,
-                x=0.01,
-                xanchor="left",
-                y=1.15,
-                yanchor="top",
-                bgcolor="white",
-                bordercolor="gray",
-                borderwidth=1,
-            )
-        ],
-    )
-    # Point size slider
-    size_steps = []
-    for size_multiplier in [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]:
-        step = dict(
-            method="restyle",
-            args=[{"marker.size": [norm_sizes * size_multiplier]}],
-            label=f"{size_multiplier}x",
-        )
-        size_steps.append(step)
+    def view_or_hide_all_button(group_name, hide=False):
+        """
+        Creates a dropdown button that shows only the selected encoding type.
 
-    # Figure size buttons
-    size_buttons = []
-    for width, height, label in [
-        (800, 400, "Small"),
-        (1200, 600, "Medium"),
-        (1600, 800, "Large"),
-        (2000, 1000, "XLarge"),
-    ]:
-        size_buttons.append(
-            dict(
-                label=label,
-                method="relayout",
-                args=[{"width": width, "height": height}],
-            )
+        Parameters:
+        -----------
+        group_name : str
+            Name of encoding group (e.g., "classes", "superclasses", "error")
+        showlegend_on : bool
+            Whether to show legend for this encoding type
+        """
+        visible = [False] * total_traces
+
+        # Background always visible
+        for bi in background_idxs:
+            visible[bi] = True
+
+        fig.update_menus[0].update(
+            {"visible": visible},
+            {"showlegend": showlegend_on, "legend.title.text": legend_title},
         )
 
+        # Show selected encoding group
+        for gi in encoding_groups.get(group_name, []):
+            visible[gi] = not hide
+
+        return dict(
+            label="View all" if not hide else "Hide all",
+            method="update",
+            args=[
+                {"visible": visible},
+            ],
+        )
+
+    # Determine default encoding (prefer classes if available)
+    default_group = None
+    if "classes" in encoding_groups:
+        default_group = "classes"
+    elif "superclasses" in encoding_groups:
+        default_group = "superclasses"
+    else:
+        default_group = next(iter(encoding_groups), None)
+
+    # Build dropdown buttons
+    color_buttons = [[]]
+    for name in encoding_groups.keys():
+        # Show legend for categorical (classes/superclasses), hide for continuous
+        showlegend_on = name in ["classes", "superclasses"]
+        color_buttons[0].append(button_for(name, showlegend_on=showlegend_on))
+
+    # color_buttons.append([])
+    # for name in encoding_groups.keys():
+    #     color_buttons[1].append(view_or_hide_all_button(name, hide=False))
+    # color_buttons.append([])
+    # for name in encoding_groups.keys():
+    #     color_buttons[2].append(view_or_hide_all_button(name, hide=True))
+
+    # Apply default visibility
+    initial_visible = [False] * total_traces
+    for bi in background_idxs:
+        initial_visible[bi] = True
+    if default_group is not None:
+        for gi in encoding_groups[default_group]:
+            initial_visible[gi] = True
+
+    for i, v in enumerate(initial_visible):
+        fig.data[i].visible = v
+
+    # Set initial legend title
+    initial_legend_title = ""
+    if default_group in ["classes", "superclasses"]:
+        initial_legend_title = f"{default_group.replace('_', ' ').title()}"
+
+    # ============================================
+    # LAYOUT CONFIGURATION
+    # ============================================
     fig.update_layout(
         height=FIGURE_HEIGHT,
         width=FIGURE_WIDTH,
         hovermode="closest",
-        legend=dict(title="Categories (click to toggle)", itemsizing="constant"),
+        title=title,
+        legend=dict(
+            title=initial_legend_title,
+            itemsizing="constant",
+            yanchor="top",
+            y=0.98,
+            itemclick="toggle",
+            itemdoubleclick="toggleothers",
+        ),
         updatemenus=[
-            # Dropdown for choosing color encoding
             dict(
-                buttons=color_buttons,
-                direction="down",
-                pad={"r": 10, "t": 10},
+                buttons=color_buttons[0],
+                direction="up",
                 showactive=True,
-                x=0.01,
+                x=0.05,
+                y=0.05,
                 xanchor="left",
-                y=1.15,
-                yanchor="top",
-                bgcolor="white",
-                bordercolor="gray",
-                borderwidth=1,
+                yanchor="bottom",
+                pad=dict(t=0, b=10),
             ),
-            # Figure size buttons
-            dict(
-                buttons=size_buttons,
-                direction="right",
-                pad={"r": 10, "t": 10},
-                showactive=True,
-                x=0.50,
-                xanchor="center",
-                y=1.15,
-                yanchor="top",
-                bgcolor="white",
-                bordercolor="gray",
-                borderwidth=1,
-                type="buttons",
-            ),
-        ],
-        sliders=[
-            dict(
-                active=3,  # Default to 1.0x
-                currentvalue={"prefix": "Point Size: "},
-                pad={"t": 50},
-                steps=size_steps,
-            )
+            # dict(
+            #     buttons=color_buttons[1],
+            #     direction="up",
+            #     showactive=True,
+            #     x=0.25,
+            #     y=0.05,
+            #     xanchor="left",
+            #     yanchor="bottom",
+            #     pad=dict(t=0, b=10),
+            # ),
+            # dict(
+            #     buttons=color_buttons[2],
+            #     direction="up",
+            #     showactive=True,
+            #     x=0.45,
+            #     y=0.05,
+            #     xanchor="left",
+            #     yanchor="bottom",
+            #     pad=dict(t=0, b=10),
+            # ),
         ],
     )
 
-    run.log({f"{title} plot": fig})
+    return fig
 
 
 def get_logger(debug):
@@ -446,7 +558,7 @@ def visualize_clusters(args):
     # -----------------------------
     # Loop over multiple models/tables
     # -----------------------------
-    db_path = "embeddings"
+    db_path = f"/globalscratch/ucl/irec/darimez/dino/embeddings/"
     tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
@@ -454,56 +566,86 @@ def visualize_clusters(args):
     ]  # extend as needed
     logger = get_logger(args.debug)
     if not args.debug:
-        run = wandb.init(
-            entity="miro-unet",
-            project="VLLM clustering",
-            # mode="offline",
-            name=f"visu",  # optional descriptive name
-        )
+        if wandb.run is None:
+            # No run yet → initialize a new one
+            wandb.init(
+                entity="miro-unet",
+                project="VLLM clustering",
+                # mode="offline",
+                name=f"visu",  # optional descriptive name
+            )
+        run = wandb.run
     correlation = []
     for table in tables:
-        # Start a new wandb run per model
         logger.debug(table)
-        ids, X, errors = load_embeddings(table)
-        logger.debug(f"{X.shape, X.__class__.__name__}")
-        # GPU UMAP
-        umap = UMAP(n_neighbors=15, min_dist=0.1, n_components=2, random_state=42)
-        embedding_umap = umap.fit_transform(X)
+        ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
 
-        # GPU t-SNE
-        tsne_gpu = TSNE(
-            n_components=2, perplexity=30, learning_rate=200, random_state=42
-        )
-        embedding_tsne = tsne_gpu.fit_transform(X)
+        hyperparams = {
+            "umap": {
+                "n_neighbors": 15,
+                "min_dist": 0.1,
+                "n_components": 2,
+            },
+            "tsne": {
+                "n_components": 2,
+                "perplexity": 30,
+                "early_exaggeration": 12,
+                "learning_rate": 200,
+                "n_iter": 1000,
+            },
+        }
+        sql_names = [
+            dict_to_filename(hyperparams["umap"]),
+            dict_to_filename(hyperparams["tsne"]),
+        ]
+        emb_conn = sqlite3.connect(table.replace("embeddings", "proj"), timeout=30)
+        emb_conn.execute("PRAGMA journal_mode=WAL")
+        emb_conn.execute("PRAGMA synchronous=OFF")
+        emb_conn.execute("PRAGMA temp_store=MEMORY")
+        emb_conn.execute("PRAGMA cache_size=-20000")
+        emb_cursor = emb_conn.cursor()
+        if not table_exists(emb_cursor, f"umap_{sql_names[0]}"):
+            sql_columns = ", ".join(
+                [
+                    "comp_" + str(i) + " REAL"
+                    for i in range(hyperparams["umap"]["n_components"])
+                ]
+            )
+            emb_cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS umap_{sql_names[0]} (
+                    id INTEGER PRIMARY KEY
+                    {sql_columns}
+                )""")
+            umap = UMAP(**hyperparams["umap"])
+            embedding_umap = umap.fit_transform(X)
+        else:
+            embedding_umap = np.zeros((len(X), 2))
+        if not table_exists(emb_cursor, f"tsne_{sql_names[1]}"):
+            sql_columns = ", ".join(
+                [
+                    "comp_" + str(i) + " REAL"
+                    for i in range(hyperparams["tsne"]["n_components"])
+                ]
+            )
+            emb_cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS tsne_{sql_names[1]} (
+                    id INTEGER PRIMARY KEY
+                    {sql_columns}
+                )""")
+            tsne_gpu = TSNE(**hyperparams["tsne"])
+            embedding_tsne = tsne_gpu.fit_transform(X)
+        else:
+            embedding_tsne = np.zeros((len(X), 2))
         if run:
             # --- Load COCO JSON ---
-            with open(
-                "/globalscratch/ucl/irec/darimez/dino/coco/validation/annotations/instances_val2017.json",
-                "r",
-            ) as f:
-                data = json.load(f)
-
-            # --- Build lookup maps ---
-            id_to_name = {
-                cat["id"]: cat["supercategory"] + "_" + cat["name"]
-                for cat in data["categories"]
-            }
-            id_to_super = {
-                cat["id"]: cat["supercategory"] for cat in data["categories"]
-            }
-
-            # Define category and supercategory lists
-            categories = list(set(id_to_name.values()))
-            supercategories = list(set(id_to_super.values()))
-
-            # --- Group annotations by image ---
-            anns_by_image = defaultdict(list)
-            for ann in data["annotations"]:
-                anns_by_image[ann["image_id"]].append(ann)
-
+            anns_by_image, id_to_name, id_to_super, categories, supercategories = (
+                get_lookups()
+            )
             rows = []
-            for emb_umap, emb_tsne, error, img_id in zip(
-                embedding_umap, embedding_tsne, errors, ids
+            umap_rows = [] if embedding_umap is not None else None
+            tsne_rows = [] if embedding_tsne is not None else None
+            for emb_umap, emb_tsne, hf, miou, mconf, cat, supercat, img_id in zip(
+                embedding_umap, embedding_tsne, hfs, mious, mconfs, cats, supercats, ids
             ):
                 anns = anns_by_image[img_id]  # from COCO JSON grouping
 
@@ -524,17 +666,46 @@ def visualize_clusters(args):
                     + list(emb_tsne)
                     + list(cat_counts.values())
                     + list(super_counts.values())
-                    + list(error)
+                    + list([hf, miou, mconf])
                 )
                 rows.append(row)
+                if umap_rows:
+                    umap_rows.append([len(row)] + list(emb_umap))
+                if tsne_rows:
+                    tsne_rows.append([len(row)] + list(emb_tsne))
+                if len(row) % 500 == 0:
+                    if umap_rows:
+                        emb_cursor.execute(
+                            f"INSERT INTO umap_{sql_names[0]} VALUES ({','.join(['?' for _ in range(len(umap_rows[0]))])})",
+                            umap_rows,
+                        )
+                        umap_rows = [] if embedding_umap is not None else None
+                    if tsne_rows:
+                        emb_cursor.execute(
+                            f"INSERT INTO tsne_{sql_names[1]} VALUES ({','.join(['?' for _ in range(len(tsne_rows[0]))])})",
+                            tsne_rows,
+                        )
+                        tsne_rows = [] if embedding_tsne is not None else None
 
+                    emb_conn.commit()
+            if umap_rows:
+                emb_cursor.execute(
+                    f"INSERT INTO umap_{sql_names[0]} VALUES ({','.join(['?' for _ in range(len(umap_rows[0]))])})",
+                    umap_rows,
+                )
+            if tsne_rows:
+                emb_cursor.execute(
+                    f"INSERT INTO tsne_{sql_names[1]} VALUES ({','.join(['?' for _ in range(len(tsne_rows[0]))])})",
+                    tsne_rows,
+                )
+            emb_conn.commit()
             # Build dataframe
             columns = (
                 [f"UMAP-{i}" for i in range(embedding_umap.shape[1])]
                 + [f"t-SNE-{i}" for i in range(embedding_tsne.shape[1])]
                 + categories
                 + supercategories
-                + ["box_loss", "cls_loss", "dfl_loss", "super_cls_loss"]
+                + ["hit_freq", "mean_iou", "mean_conf"]
             )
             df = pd.DataFrame(rows, columns=columns)
 
@@ -547,15 +718,26 @@ def visualize_clusters(args):
             correlation.append(cross_corr)
 
             # Log to W&B
-            run.log({f"{table}": wandb.Table(dataframe=df)})
-            log_plot_plotly(
+            table_name = table.split(f"{os.sep}")[-1].split(".")[0]
+            run.log({f"{table_name}": wandb.Table(dataframe=df)})
+            log_plot(
                 [embedding_umap, embedding_tsne],
                 df[supercategories].values.argmax(1),
                 supercategories,
-                df["super_cls_loss"],
-                f"{table}",
+                df["hit_freq"],
+                f"{table_name}",
                 run,
             )
+            fig = log_plot_plotly(
+                df,
+                umap_col=["UMAP-0", "UMAP-1"],
+                tsne_col=["t-SNE-0", "t-SNE-1"],
+                class_cols=categories,
+                superclass_cols=supercategories,
+                continuous_cols=["hit_freq", "mean_iou", "mean_conf"],
+                title="Embedding Visualization",
+            )
+            run.log({f"{table_name}": fig})
 
     if run:
         correlation_df = pd.concat(correlation, axis=1)

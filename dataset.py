@@ -82,6 +82,7 @@ class COCODataset(torch.utils.data.Dataset):
         img_path = os.path.join(self.data_path, f"{self.id_to_file[image_id]}.jpg")
         image = Image.open(img_path).convert("RGB")
         image = self.transform(image)
+
         if image.shape[0] == 1:
             image = image.repeat(3, 1, 1)
 

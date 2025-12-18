@@ -38,7 +38,7 @@ def cluster(args):
         models = args.model.split(",")
 
     run = None
-    if not args.debug:
+    if not args.debug and False:
         run = wandb.init(
             entity="miro-unet",
             project="VLLM clustering",
@@ -77,7 +77,7 @@ def cluster(args):
         )
         clustering_layer.distance_matrix_db(dataloader)
 
-        if run:
+        if run and False:
             conn = sqlite3.connect(clustering_layer.embeddings_db)
             df = pd.read_sql_query("SELECT * FROM embeddings", conn)
             df["embedding"] = df["embedding"].apply(
@@ -92,10 +92,23 @@ def cluster(args):
 
 
 def main(args):
-    if args.visualize:
+    name = "cluster; " if args.cluster else ""
+    name += "visu; " if args.visu else ""
+    name += "knn" if args.knn else ""
+    wandb.init(
+        entity="miro-unet",
+        project="VLLM clustering",
+        # mode="offline",
+        name=name,  # optional descriptive name
+    )
+    if args.visu:
         from cluster_visualization import visualize_clusters
 
         visualize_clusters(args)
+    elif args.knn:
+        from evaluate_clusters import KNN
+
+        KNN(args)
     else:
         cluster(args)
 
@@ -111,11 +124,27 @@ def parse_args():
         help="comma separated list of models to use for embedding, defaults to several yolo models",
     )
     parser.add_argument(
-        "--visualize",
+        "--cluster",
+        action="store_true",
+        help="Compute embeddings and distance matrice",
+    )
+    parser.add_argument(
+        "--visu",
         action="store_true",
         help="Visualize the clusters",
     )
+    parser.add_argument(
+        "--knn",
+        action="store_true",
+        help="Train KNN for conformable predictions",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="perform all steps, will override other flags if set",
+    )
     args = parser.parse_args()
+    args.all = (not (args.cluster and args.visu and args.knn)) | args.all
     return args
 
 

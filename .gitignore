@@ -1,0 +1,5 @@
+__pycache__/
+wandb/
+yolo12s.pt yolo12x.pt yolov8s.pt yolov8x.pt
+dino/
+

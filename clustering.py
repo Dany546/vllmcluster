@@ -39,14 +39,18 @@ def box_iou(box1, box2):
 
 class yolowrapper(torch.nn.Module):
     def __init__(self, model_str):
+        super().__init__()
         self.model = YOLO(model_str).model
         self.model.eval()
         self.model.to(device)
+        self.model.device = device
 
         def hook_fn(module, input, output):
-            module.features = torch.nn.functional.adaptive_avg_pool2d(
-                input[0], (1, 1)
-            ).flatten(1)
+            module.features = (
+                torch.nn.functional.adaptive_avg_pool2d(input[0], (1, 1))
+                .squeeze(-1)
+                .squeeze(-1)
+            )
 
         # inputs of detection heads
         self.detection_layer_entry = self.model.model[-1].cv2
@@ -54,10 +58,8 @@ class yolowrapper(torch.nn.Module):
             m.features = None
             m.register_forward_hook(hook_fn)
 
-        self.logit_transform = lambda x: torch.log(x / (1 - x))
-
     def match_targets_to_preds(
-        self, final_preds, batch_idx, targets, iou_thres=0.6, conf_thres=0.5
+        self, final_preds, batch_idx, targets, N, iou_thres=0.6, conf_thres=0.5
     ):
         """
         final_preds: list of tensors per image, each [N,6] (x1,y1,x2,y2,conf,cls)
@@ -67,44 +69,91 @@ class yolowrapper(torch.nn.Module):
         """
         matched = []
         all = []
-        for img_idx in np.unique(targets["batch_idx"]):
+        for img_idx in range(N):
             mask = targets["batch_idx"] == img_idx
-            gt_boxes = targets["bboxes"][mask]  # [M,4]
-            gt_labels = targets["cls"][mask]  # [M]
             preds = final_preds[batch_idx == img_idx]
+            conf = preds[:, 4:5].squeeze(-1)
+            preds = preds[conf > conf_thres]
+            pred_box = preds[:, :4]
+            cls = preds[:, 5]
+            conf = preds[:, 4:5]
+            if mask.sum() == 0:
+                if len(preds) == 0:
+                    miou = 1
+                    cat = -1
+                    hitfreq = 1
+                else:
+                    miou = 0
+                    cat = -2
+                    hitfreq = 0
+                matched.append([miou, 1, cat, cat, hitfreq])
+                all.append(
+                    [
+                        img_idx,
+                        np.array([miou], dtype=np.float32),
+                        np.array([1], dtype=np.float32),
+                        np.array([cat], dtype=np.float32),
+                        np.array([cat], dtype=np.float32),
+                    ]
+                )
+                continue
+            gt_boxes = targets["bboxes"][mask].to(device)  # [M,4]
+            gt_labels = targets["cls"][mask].to(device).view(-1)  # [M]
             match = []
-            all.append(0)
+            all_match = []
             correct = 0
             for idx, g in enumerate(gt_boxes):
-                pred_box = preds[:, :4]
-                conf = preds[:, 4:5]
-                cls = preds[:, 5:]
-                ious = box_iou(pred_box, g.unsqueeze(0))  # [1,M]
-                best_iou, best_idx = ious[cls == gt_labels[idx]].max(0)
-                if best_iou > iou_thres and conf[best_idx] > conf_thres:
-                    match += [
-                        best_iou,
-                        conf[best_idx],
-                        gt_labels[idx],
-                        cat_to_super[gt_labels[idx]],
-                    ]
-                    correct += 1
+                if sum(cls == gt_labels[idx]) > 0:
+                    ious = box_iou(pred_box, g.unsqueeze(0))  # [1,M]
+                    best_iou, best_idx = ious[cls == gt_labels[idx]].max(0)
+                    if best_iou > iou_thres:
+                        match += [
+                            best_iou,
+                            conf[cls == gt_labels[idx]][best_idx],
+                            gt_labels[idx],
+                            cat_to_super[gt_labels[idx]],
+                        ]
+                        correct += 1
+                        ious = ious[cls == gt_labels[idx]]
+                        ious = ious[ious > iou_thres]
+                        best_iou, best_idx = ious.sort(0, descending=True)
+                        all_match += [
+                            img_idx,
+                            best_iou,
+                            conf[cls == gt_labels[idx]][ious > iou_thres][best_idx],
+                            np.ones(len(best_iou)) * gt_labels[idx],
+                            np.ones(len(best_iou)) * cat_to_super[gt_labels[idx]],
+                        ]
             correct /= len(gt_boxes)
-            match = np.array(match, dtype=np.float32)
-            values, counts = np.unique(match[:, -2], return_counts=True)
+            cpu_labels = gt_labels.cpu().numpy()
+            values, counts = np.unique(cpu_labels, return_counts=True)
             most_frequent_cat = values[np.argmax(counts)]
-            values, counts = np.unique(match[:, -1], return_counts=True)
+            super_cat = [cat_to_super[cat] for cat in cpu_labels]
+            values, counts = np.unique(super_cat, return_counts=True)
             most_frequent_supercat = values[np.argmax(counts)]
-            matched.append(
-                [
-                    match[:, 0].mean(),
-                    match[:, 1].mean(),
-                    most_frequent_cat,
-                    most_frequent_supercat,
-                    correct,
-                ]
-            )
-            all.append(match)
+            if len(match) > 0:
+                match = np.array(match, dtype=np.float32)
+                matched.append(
+                    [
+                        match[:, 0].mean(),
+                        match[:, 1].mean(),
+                        most_frequent_cat,
+                        most_frequent_supercat,
+                        correct,
+                    ]
+                )
+                all.append(all_match)
+            else:
+                matched.append([0, 1, most_frequent_cat, most_frequent_supercat, 0])
+                all.append(
+                    [
+                        img_idx,
+                        np.array([0], dtype=np.float32),
+                        np.array([1], dtype=np.float32),
+                        np.array([most_frequent_cat], dtype=np.float32),
+                        np.array([most_frequent_supercat], dtype=np.float32),
+                    ]
+                )
         return matched, all
 
     def forward(self, images, targets=None):
@@ -127,13 +176,19 @@ class yolowrapper(torch.nn.Module):
             preds,
             conf_thres=0.25,
             iou_thres=0.45,
-            multi_label=False,
-            return_indices=True,  # you need to modify NMS to give you this
+            max_det=300,
+            return_idxs=True,  # you need to modify NMS to give you this
         )
         # Slice raw predictions to keep logits/objectness
-        batch_idx = preds[keep_indices, :1]  # batch index
+        batch_idx = []
+        for img_idx, img in enumerate(keep_indices):
+            batch_idx.extend([img_idx] * len(img))  # batch index
+        batch_idx = torch.tensor(batch_idx, device=images.device)
+        final_preds = torch.cat([f for f in final_preds], dim=0)
         # Replace targets/preds with filtered ones
-        final_preds, all = self.match_targets_to_preds(final_preds, batch_idx, targets)
+        final_preds, all = self.match_targets_to_preds(
+            final_preds, batch_idx, targets, len(images)
+        )
         embeddings = torch.cat([m.features for m in self.detection_layer_entry], dim=1)
 
         return embeddings, final_preds, all
@@ -145,9 +200,9 @@ class Clustering_layer:
         self.model_name = model_name
 
         if model_str == "dino":
-            self.model = DINO()
+            self.model = DINO().to(device)
         elif model_str == "clip":
-            self.model = CLIP()
+            self.model = CLIP().to(device)
         elif "yolo" in model_str:
             self.model = yolowrapper(model_str)
         else:
@@ -157,7 +212,7 @@ class Clustering_layer:
         logging.basicConfig(
             format="[%(levelname)s] %(message)s", handlers=[logging.StreamHandler()]
         )
-        self.logger = logging.getlogger(self.__class__.__name__)
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         if self.debug:
             self.logger.setLevel(logging.DEBUG)
@@ -171,14 +226,15 @@ class Clustering_layer:
             f"/globalscratch/ucl/irec/darimez/dino/distances/{model_name}.db"
         )
 
+    @torch.no_grad()
+    @torch.autocast(device_type="cuda", dtype=torch.float32)
     def distance_matrix_db(
         self,
         data_loader,
-        use_half: bool = True,
         pragma_speed: bool = True,
     ) -> Tuple[str, str]:
         """Compute pairwise distances and store them in SQLite without loading the full matrix. - Embeddings are inserted in batches (executemany). - Distances are computed block-by-block and written in bulk. - Progress table allows safe resume after interruption."""
-        batch_size = len(next(iter(data_loader)))
+        batch_size = len(next(iter(data_loader))[0])
         embeddings_db = self.embeddings_db
         distances_db = self.distances_db
 
@@ -193,17 +249,19 @@ class Clustering_layer:
         emb_cursor.execute("""
             CREATE TABLE IF NOT EXISTS embeddings (
                 id INTEGER PRIMARY KEY,
+                img_id INTEGER,
                 embedding BLOB,
                 hit_freq REAL,
                 mean_iou REAL,
                 mean_conf REAL,
-                flag_supercat INTEGER,
-                flag_cat INTEGER
+                flag_cat INTEGER,
+                flag_supercat INTEGER
             )
         """)
         emb_cursor.execute("""
             CREATE TABLE IF NOT EXISTS predictions (
                 id INTEGER PRIMARY KEY,
+                img_id INTEGER,
                 iou BLOB,
                 conf BLOB,
                 cat BLOB,
@@ -245,54 +303,89 @@ class Clustering_layer:
         if existing_count == 0:
             self.logger.info("Computing embeddings from scratch...")
         else:
-            self.logger.info(
-                f"Found {existing_count} existing embeddings, checking if more needed..."
-            )
+            self.logger.info(f"Found {existing_count} existing embeddings ...")
 
         idx = existing_count
         new_embeddings = 0
-        for img_id, images, labels in data_loader:
-            if "yolo" in self.model_name:
-                emb, outputs, all_output = self.model(images, labels)
-            else:
-                emb = self.model(images)
-                outputs = [None] * len(emb)
-                all_output = [None] * len(emb)
-
-            row = []
-            all_row = []
-            for vec, output, all_out in zip(emb.cpu(), outputs, all_output):
-                miou, mconf, cat, supercat, hit_freq = output
-                row += (
-                    int(img_id),
-                    vec.numpy().tobytes(),
-                    hit_freq,
-                    miou,
-                    mconf,
-                    cat,
-                    supercat,
-                )
+        if existing_count < len(data_loader.dataset):
+            data_loader.start_idx = existing_count
+            for batch_ids, (img_ids, images, labels) in enumerate(data_loader):
+                images = images.to(device)
                 if "yolo" in self.model_name:
-                    all_row += (
-                        int(img_id),
-                        all_out[:, 0].tobytes(),
-                        all_out[:, 1].tobytes(),
-                        all_out[:, 2].tobytes(),
-                        all_out[:, 3].tobytes(),
-                    )
-                    idx += 1
-                    new_embeddings += 1
+                    emb, outputs, all_output = self.model(images, labels)
+                else:
+                    emb = self.model(images)
 
-            emb_cursor.executemany(
-                "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?)",
-                row,
-            )
-            if "yolo" in self.model_name:
-                emb_cursor.executemany(
-                    "INSERT OR IGNORE INTO predictions VALUES (?, ?, ?, ?, ?)",
-                    all_row,
-                )
-            emb_conn.commit()
+                if "yolo" in self.model_name:
+                    row = []
+                    all_row = []
+                    for id, (img_id, vec, output) in enumerate(
+                        zip(img_ids, emb.cpu(), outputs)
+                    ):
+                        miou, mconf, cat, supercat, hit_freq = output
+                        row.append(
+                            [
+                                int((batch_ids * batch_size) + id),
+                                int(img_id),
+                                vec.numpy().tobytes(),
+                                hit_freq,
+                                miou,
+                                mconf,
+                                cat,
+                                supercat,
+                            ]
+                        )
+                    emb_cursor.executemany(
+                        "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        row,
+                    )
+                    for id, (img_id, miou, mconf, cat, supercat) in enumerate(
+                        all_output
+                    ):
+                        all_row.append(
+                            [
+                                int(batch_ids * batch_size + id),
+                                int(img_id),
+                                miou.tobytes(),
+                                mconf.tobytes(),
+                                cat.tobytes(),
+                                supercat.tobytes(),
+                            ]
+                        )
+                    emb_cursor.executemany(
+                        "INSERT OR IGNORE INTO predictions VALUES (?, ?, ?, ?, ?, ?)",
+                        all_row,
+                    )
+                else:
+                    row = []
+                    for id, (img_id, vec, label) in enumerate(
+                        zip(img_ids, emb.cpu(), labels["cls"])
+                    ):
+                        cpu_labels = label.numpy()
+                        values, counts = np.unique(cpu_labels, return_counts=True)
+                        most_frequent_cat = values[np.argmax(counts)]
+                        super_cat = [cat_to_super[cat] for cat in cpu_labels]
+                        values, counts = np.unique(super_cat, return_counts=True)
+                        most_frequent_supercat = values[np.argmax(counts)]
+                        row.append(
+                            [
+                                int((batch_ids * batch_size) + id),
+                                int(img_id),
+                                vec.numpy().tobytes(),
+                                0,
+                                0,
+                                0,
+                                most_frequent_cat,
+                                most_frequent_supercat,
+                            ]
+                        )
+                    emb_cursor.executemany(
+                        "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        row,
+                    )
+                emb_conn.commit()
+                idx += len(images)
+                new_embeddings += len(images)
 
         if new_embeddings > 0:
             emb_cursor.execute(
@@ -303,51 +396,54 @@ class Clustering_layer:
         else:
             self.logger.info(f"All {existing_count} embeddings already computed")
 
-        n_samples = idx
+        emb_conn.close()
+        emb_conn = sqlite3.connect(embeddings_db, timeout=30)
+        emb_cursor = emb_conn.cursor()
 
         # Step 2: Compute distances with efficient resume
-        n_blocks = len(data_loader) + 1
+        n_samples = len(data_loader.dataset)
+        n_blocks = len(data_loader)
 
         self.logger.info(
             f"Computing distances for {n_samples} samples ({n_blocks} x {n_blocks} blocks)..."
         )
 
         def load_block(i_block):
-            start, end = (
-                i_block * batch_size,
-                min((i_block + 1) * batch_size, n_samples),
-            )
+            start = int(i_block * batch_size)
+            end = int(min((i_block + 1) * batch_size, n_samples))
             emb_cursor.execute(
-                "SELECT id, embedding FROM embeddings WHERE id >= ? AND id < ? ORDER BY id",
+                "SELECT img_id, embedding FROM embeddings WHERE id >= ? AND id < ?",
                 (start, end),
             )
             idx, emb = [], []
             for eid, blob in emb_cursor.fetchall():
                 idx.append(int(eid))
                 emb.append(np.frombuffer(blob, dtype=np.float32))
-            if not emb:
-                return [], None
             return idx, torch.from_numpy(np.stack(emb)).to(device)
 
         for i_block in range(n_blocks):
-            idx_i, emb_i = load_block(i_block)
+            try:
+                idx_i, emb_i = load_block(i_block)
+            except Exception as e:
+                self.logger.error(f"Error loading block {i_block}: {e}")
+                raise
+
             if emb_i is None or emb_i.shape[0] == 0:
-                self.logger.info(f"Skipping empty line {i_block}")
+                self.logger.info(f"Skipping empty line {i_block}: {emb_i.cpu()}")
                 continue
 
-            for j_block in range(i_block + 1, n_blocks):  # only upper triangle
+            for j_block in range(i_block, n_blocks):  # only upper triangle
                 idx_j, emb_j = load_block(j_block)
                 if emb_j is None:
                     self.logger.info(f"Skipping empty column {j_block}")
                     continue
 
-                with torch.cuda.amp.autocast(enabled=use_half), torch.no_grad():
-                    dist_block = torch.cdist(emb_i, emb_j, p=2).cpu().numpy()
+                dist_block = torch.cdist(emb_i, emb_j, p=2).cpu().numpy()
 
                 rows = np.column_stack(
                     [
-                        np.repeat([gid for gid, _ in idx_i], len(idx_j)),
-                        np.tile([gid for gid, _ in idx_j], len(idx_i)),
+                        np.repeat([gid for gid in idx_i], len(idx_j)),
+                        np.tile([gid for gid in idx_j], len(idx_i)),
                         dist_block.ravel(),
                     ]
                 ).tolist()
