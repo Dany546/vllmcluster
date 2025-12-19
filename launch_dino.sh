@@ -13,12 +13,12 @@ module load CUDA/12.5.0
 cd ~/MIRO/vllmcluster
 
 # --- Define cleanup function ---
-cleanup() {
-    echo "Cleaning up W&B runs..."
-    wandb sync --sync-all --clean
-}
+# cleanup() {
+#     echo "Cleaning up W&B runs..."
+#     wandb sync --sync-all --clean
+# }
 # --- Trap signals ---
-trap cleanup SIGINT SIGTERM EXIT
+# trap cleanup SIGINT SIGTERM EXIT
 
 # cd $GLOBALSCRATCH/dino
 # rm -rf embeddings/*clip*
@@ -30,9 +30,9 @@ source dino/bin/activate
 # source visu/bin/activate
 # pip install ipywidgets IPython --quiet
 python main.py --visu
-python main.py --knn
+# python main.py --knn
 
-cleanup
+# cleanup
 
 # --partition=gpu
 # --gres=gpu:1

@@ -81,7 +81,15 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     )  # run_id + model + hyperparams
     sql = f"INSERT OR REPLACE INTO metadata(run_id, {cols}) VALUES ({placeholders})"
     cur.execute(sql, (run_id, model_name, *hyperparams.values()))
-
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT,
+            x FLOAT,
+            y FLOAT,
+            FOREIGN KEY(run_id) REFERENCES metadata(run_id)
+        )
+    """)
     # Insert embeddings
     for x, y in embedding:
         cur.execute(
@@ -103,8 +111,6 @@ def compute_and_store_metrics(model_name, data, db_path=""):
     cur = conn.cursor()
 
     # Ensure table exists with dynamic category/supercategory columns
-    cur.execute("CREATE TABLE IF NOT EXISTS metadata (model TEXT PRIMARY KEY)")
-    cur.execute("INSERT OR REPLACE INTO metadata(model) VALUES (?)", (model_name,))
     cat_cols = ", ".join([f'"{c}" INT' for c in categories])
     super_cols = ", ".join([f'"{sc}" INT' for sc in supercategories])
     cur.execute(f"""
@@ -182,7 +188,9 @@ def project(args):
     def expand_params(param_dict, algo):
         keys = list(param_dict.keys())
         for values in itertools.product(*[param_dict[k] for k in keys]):
-            yield dict(zip(keys, values), algo=algo)
+            d = dict(zip(keys, values))
+            d["algo"] = algo
+            yield d
 
     all_hyperparams = list(expand_params(umap_params, "umap")) + list(
         expand_params(tsne_params, "tsne")
@@ -196,8 +204,11 @@ def project(args):
         # Check if run_id already exists in metadata
         conn = sqlite3.connect(os.path.join(db_path, f"metrics.db"))
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM metadata WHERE model=?", (model_name,))
-        exists = cur.fetchone()
+        try:
+            cur.execute("SELECT 1 FROM metrics WHERE model=?", (model_name,))
+            exists = cur.fetchone()
+        except Exception as e:
+            exists = False
         conn.close()
         if exists:
             logger.debug(f"Loading existing metrics for model {model_name}")
@@ -217,6 +228,16 @@ def project(args):
             # Check if run_id already exists in metadata
             conn = sqlite3.connect(os.path.join(db_path, f"{algo}.db"))
             cur = conn.cursor()
+            cols = ", ".join(
+                ["model TEXT"] + list(str(h) + " REAL" for h in hyperparam.keys())
+            )
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS metadata (
+                    run_id TEXT,
+                    {cols},
+                )
+            """)
+            conn.commit()
             cur.execute("SELECT 1 FROM metadata WHERE run_id=?", (run_id,))
             exists = cur.fetchone()
             conn.close()
