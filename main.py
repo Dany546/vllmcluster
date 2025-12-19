@@ -102,9 +102,11 @@ def main(args):
         name=name,  # optional descriptive name
     )
     if args.visu:
-        from cluster_visualization import visualize_clusters
+        # from cluster_visualization import visualize_clusters
+        from project import project
 
-        visualize_clusters(args)
+        # visualize_clusters(args)
+        project(args)
     elif args.knn:
         from evaluate_clusters import KNN
 

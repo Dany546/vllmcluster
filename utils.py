@@ -5,13 +5,8 @@ import os
 import sqlite3
 from collections import defaultdict
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-from matplotlib.colors import ListedColormap
-from sklearn.manifold import TSNE
-from umap import UMAP  # GPU versions
 
 
 def get_lookups():
