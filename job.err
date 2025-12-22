@@ -28,25 +28,22 @@ Activating Modules:
   1) CUDA/12.5.0
 
 wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run lhtk6u7m
 wandb: Tracking run with wandb version 0.23.1
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251222_164837-ouxvqocm
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251222_171417-lhtk6u7m
 wandb: Run `wandb offline` to turn off syncing.
 wandb: Syncing run knn
 wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
-wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/ouxvqocm
-wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-root - INFO - Computing 6 rows for table yolo12s
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/lhtk6u7m
 Traceback (most recent call last):
   File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 155, in <module>
     main(args)
   File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 113, in main
     KNN(args)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 275, in KNN
-    process_table(tasks[table_name], records, table, table_name)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 172, in process_table
-    distances = load_distances(table_path.replace("embeddings", "distances"))
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/utils.py", line 97, in load_distances
-    assert len(ccounts) == normal_counts, f"{len(ccounts)} {len(counts)}"
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError: 78 4992
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 240, in KNN
+    tables = [
+             ^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 244, in <listcomp>
+    and table.split("/")[-1].split(".")[0] not in ["metrics", "umap", "tsne"]
+        ^^^^^
+NameError: cannot access free variable 'table' where it is not associated with a value in enclosing scope

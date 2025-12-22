@@ -6,7 +6,7 @@ from time import time
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import KFold, train_test_split
+from sklearn.model_selection import KFold
 from sklearn.neighbors import KNeighborsRegressor
 from utils import get_logger, load_distances, load_embeddings
 
@@ -241,6 +241,7 @@ def KNN(args):
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
         if file.endswith(".db")
+        and table.split("/")[-1].split(".")[0] not in ["metrics", "umap", "tsne"]
     ]  # extend as needed
     logger = get_logger(args.debug)
     if not args.debug:
@@ -273,11 +274,15 @@ def KNN(args):
                 f"Computing {len(tasks[table_name])} rows for table {table_name}"
             )
         process_table(tasks[table_name], records, table, table_name)
+
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("SELECT * FROM knn_results", conn)
+    conn.close()
     run.log(
         {
             "table": wandb.Table(
-                data=[[k for k in r.values()] for r in records],
-                columns=list(records[0].keys()),
+                data=df.values.tolist(),
+                columns=list(df.columns),
             )
         }
     )
