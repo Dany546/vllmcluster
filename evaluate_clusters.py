@@ -5,7 +5,7 @@ from time import time
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 from sklearn.neighbors import KNeighborsRegressor
 from utils import get_logger, load_distances, load_embeddings
@@ -39,11 +39,12 @@ def init_db():
             random_state INTEGER,
             num_folds INTEGER,
             cv_type TEXT,
+            distance_metric TEXT,
             fold INTEGER,
-            mse REAL,
+            mae REAL,
             r2 REAL,
             corr REAL,
-            PRIMARY KEY(model, k, random_state, num_folds, cv_type, fold)
+            PRIMARY KEY(model, k, random_state, num_folds, cv_type, distance_metric, fold)
         )
     """)
 
@@ -51,17 +52,17 @@ def init_db():
     conn.close()
 
 
-def already_computed(model, k, random_state, num_folds, cv_type, c):
+def already_computed(model, k, random_state, num_folds, cv_type, distance_metric, c):
     c.execute(
         """
         SELECT 1 FROM knn_results
-        WHERE model=? AND k=? AND random_state=? AND num_folds=? AND cv_type=?
+        WHERE model=? AND k=? AND random_state=? AND num_folds=? AND cv_type=? AND distance_metric=?
         LIMIT 1
     """,
-        (model, k, random_state, num_folds, cv_type),
+        (model, k, random_state, num_folds, cv_type, distance_metric),
     )
-    exists = c.fetchone() is not None
-    return exists
+    exists = c.fetchone()
+    return exists is not None
 
 
 def insert_record(record, c):
@@ -69,8 +70,8 @@ def insert_record(record, c):
         try:
             c.execute(
                 """
-                INSERT OR IGNORE INTO knn_results (model, k, random_state, num_folds, cv_type, fold, mse, r2, corr)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO knn_results (model, k, random_state, num_folds, cv_type, distance_metric, fold, mae, r2, corr)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     record["model"],
@@ -78,13 +79,14 @@ def insert_record(record, c):
                     record["random_state"],
                     record["num_folds"],
                     record["cv_type"],
+                    record["distance_metric"],
                     record["fold"],
-                    record["mse"],
+                    record["mae"],
                     record["r2"],
                     record["corr"],
                 ),
             )
-            break
+            return True
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower():
                 time.sleep(0.1 * (attempt + 1))
@@ -93,17 +95,21 @@ def insert_record(record, c):
     raise RuntimeError("DB remained locked after retries")
 
 
-def get_tasks(tables, neighbor_grid, RN, num_folds):
+def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     tasks = {}  # list of (table_name, k)
     for table in tables:
         table_name = table.split("/")[-1].split(".")[0]
         for k in neighbor_grid:
-            if not already_computed(table_name, k, RN, num_folds, "kfold", c):
+            if not already_computed(
+                table_name, k, RN, num_folds, "kfold", distance_metric, c
+            ):
                 if table_name not in tasks:
                     tasks[table_name] = []
-                tasks[table_name].append((table_name, k, RN, num_folds, "kfold"))
+                tasks[table_name].append(
+                    (table_name, k, RN, num_folds, "kfold", distance_metric)
+                )
     conn.close()
     return tasks
 
@@ -117,9 +123,10 @@ def work_fn(args):
         random_state,
         num_folds,
         cv_type,
+        distance_metric,
+        kf,
     ) = args
 
-    kf = KFold(n_splits=num_folds, shuffle=True, random_state=random_state)
     indices = np.arange(5000)
     folds = list(kf.split(indices))
     conn = sqlite3.connect(DB_PATH)
@@ -137,7 +144,7 @@ def work_fn(args):
             knn = KNeighborsRegressor(
                 n_neighbors=k,
                 metric="precomputed",
-                weights="distance",
+                weights="unifrom" if "uniform" in distance_metric else "distance",
             )
 
             knn.fit(D_train, y_train)
@@ -149,19 +156,20 @@ def work_fn(args):
                 "cv_type": cv_type,
                 "num_folds": len(folds),
                 "random_state": random_state,
+                "distance_metric": distance_metric,
                 "fold": fold_id,
-                "mse": mean_squared_error(y_test, y_pred),
+                "mae": mean_absolute_error(y_test, y_pred),
                 "r2": r2_score(y_test, y_pred),
                 "corr": np.corrcoef(y_test, y_pred)[0, 1],
             }
             records.append(record)
-            insert_record(record, c)
-            insert_record(record, c)
+            success = insert_record(record, c)
 
         conn.commit()
     except Exception as e:
         print(f"Error processing table {table_name}: {e}")
         conn.rollback()
+        raise e
     finally:
         conn.close()
         return records
@@ -170,69 +178,84 @@ def work_fn(args):
 def process_table(args_list, results, table_path, table_name):
     ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table_path)
     distances = load_distances(table_path.replace("embeddings", "distances"))
+    kf = KFold(n_splits=args_list[0][3], shuffle=True, random_state=args_list[0][2])
 
-    args_list = [(distances, mious) + args for args in args_list]
-    with Pool(processes=4) as pool:
-        results_per_k = pool.map(work_fn, args_list)
+    args_list = [(distances, mious) + args + (kf,) for args in args_list]
+    for args in args_list:
+        results.extend(work_fn(args))
 
-    for recs in results_per_k:
-        results.extend(recs)
+    return results
 
 
-# def perform_kfold(
-#     distances,
-#     mious,
-#     folds,
-#     records,
-#     model_name,
-#     logger,
-#     neighbor_grid=[5, 10, 15, 20, 30, 50],
-#     RN=0,
-# ):
-#     conn = sqlite3.connect(DB_PATH)
-#     c = conn.cursor()
-#     try:
-#         for k in neighbor_grid:
-#             if already_computed(model_name, k, RN, len(folds), "kfold", c):
-#                 logger.info(
-#                     f"Skipping already computed k={k}, model={model_name}, random_state={RN}, num_folds={len(folds)}, cv_type='kfold'"
-#                 )
-#                 continue
-#             for fold_id, (tr_idx, te_idx) in enumerate(folds):
-#                 D_train = distances[tr_idx][:, tr_idx]
-#                 D_test = distances[te_idx][:, tr_idx]
+import plotly.express as px
+import plotly.graph_objects as go
 
-#                 y_train = mious[tr_idx]
-#                 y_test = mious[te_idx]
 
-#                 knn = KNeighborsRegressor(
-#                     n_neighbors=k,
-#                     metric="precomputed",
-#                     weights="distance",
-#                 )
+def plot_results(df):
+    df = df.assign(
+        merged=df[["model", "distance_metric"]].astype(str).agg("_".join, axis=1)
+    )[["model"]]
 
-#                 knn.fit(D_train, y_train)
-#                 y_pred = knn.predict(D_test)
+    metrics = ["mae", "r2", "corr"]
+    colors = px.colors.qualitative.Pastel
 
-#                 record = {
-#                     "model": model_name,
-#                     "k": k,
-#                     "cv_type": "kfold",
-#                     "num_folds": len(folds),
-#                     "random_state": RN,
-#                     "fold": fold_id,
-#                     "mse": mean_squared_error(y_test, y_pred),
-#                     "r2": r2_score(y_test, y_pred),
-#                     "corr": np.corrcoef(y_test, y_pred)[0, 1],
-#                 }
-#                 records.append(record)
-#                 insert_record(record, c)
-#             conn.commit()
-#     except Exception as e:
-#         logger.error(f"Error occurred during evaluation: {e}")
-#     finally:
-#         conn.close()
-#     return records
+    fig = go.Figure()
+
+    # Add one trace per metric per model
+    for metric in metrics:
+        for i, model in enumerate(df["model"].unique()):
+            sub = df[df["model"] == model]
+
+            fig.add_trace(
+                go.Box(
+                    x=sub["k"],
+                    y=sub[metric],
+                    name=f"{model} ({metric})",
+                    marker_color=colors[i % len(colors)],
+                    boxmean=True,
+                    visible=(metric == "mae"),  # only MAE visible at start
+                )
+            )
+
+    # Build dropdown menu
+    buttons = []
+    n_models = df["model"].nunique()
+
+    for m_idx, metric in enumerate(metrics):
+        visibility = []
+        for i in range(len(metrics)):
+            for _ in range(n_models):
+                visibility.append(i == m_idx)
+
+        buttons.append(
+            dict(
+                label=metric.upper(),
+                method="update",
+                args=[
+                    {"visible": visibility},
+                    {"title": f"{metric.upper()} distribution per k"},
+                ],
+            )
+        )
+
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                type="dropdown",
+                x=1.15,
+                y=0.5,
+                showactive=True,
+                buttons=buttons,
+            )
+        ],
+        title="MAE distribution per k",
+        xaxis_title="k",
+        yaxis_title="Metric value",
+        template="plotly_white",
+        boxmode="group",
+    )
+
+    return fig
 
 
 def KNN(args):
@@ -240,8 +263,10 @@ def KNN(args):
     tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
-        if file.endswith(".db")
-        and table.split("/")[-1].split(".")[0] not in ["metrics", "umap", "tsne"]
+        if (
+            file.endswith(".db")
+            and file.split("/")[-1].split(".")[0] not in ["metrics", "umap", "tsne"]
+        )
     ]  # extend as needed
     logger = get_logger(args.debug)
     if not args.debug:
@@ -257,32 +282,39 @@ def KNN(args):
     init_db()
 
     neighbor_grid = [5, 10, 15, 20, 30, 50]
-    n_samples = 5000
     RN = 42
     num_folds = 10
-    tasks = get_tasks(tables, neighbor_grid, RN, num_folds)
+    distance_metric = "euclidean"
+    tasks = get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric)
+    print("Tasks:", tasks)
 
-    records = []
+    if len(tasks) > 0:
+        records = []
 
-    for table in tables:
-        # Start a new wandb run per model
-        table_name = table.split("/")[-1].split(".")[0]
-        if table_name not in tasks.keys():
-            continue
-        else:
-            logger.info(
-                f"Computing {len(tasks[table_name])} rows for table {table_name}"
-            )
-        process_table(tasks[table_name], records, table, table_name)
+        for table in tables:
+            # Start a new wandb run per model
+            table_name = table.split("/")[-1].split(".")[0]
+            if table_name not in tasks.keys():
+                continue
+            else:
+                logger.info(
+                    f"Computing {len(tasks[table_name])} rows for table {table_name}"
+                )
+            process_table(tasks[table_name], records, table, table_name)
 
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM knn_results", conn)
+        records = pd.DataFrame(
+            data=[record.values() for record in records], columns=records[0].keys()
+        )
+        run.log(
+            {
+                "new_results": wandb.Table(
+                    data=records.values.tolist(),
+                    columns=list(records.columns),
+                )
+            }
+        )
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM knn_results ORDER BY model", conn)
     conn.close()
-    run.log(
-        {
-            "table": wandb.Table(
-                data=df.values.tolist(),
-                columns=list(df.columns),
-            )
-        }
-    )
+    fig = plot_results(df)
+    run.log({"plot": fig})

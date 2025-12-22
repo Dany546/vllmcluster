@@ -171,6 +171,7 @@ def project(args):
     ]
     logger = get_logger(args.debug)
 
+    db_path = "/globalscratch/ucl/irec/darimez/dino/"
     umap_params = {
         "n_neighbors": [15, 30, 60],
         "min_dist": [0.02, 0.1, 0.5],

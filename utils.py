@@ -89,21 +89,11 @@ def load_distances(db_path):
     rows = df[["i", "j", "distance"]].values  # or cursor.fetchall() if you prefer
     rows = rows[np.lexsort((rows[:, 1], rows[:, 0]))]
 
-    values, idx, counts = np.unique(rows[:, 0], return_counts=True, return_inverse=True)
-    n = len(values)
-    print(len(idx), len(counts))
-    print(f"Number of nodes: {n}", rows.shape)
-    c_values, ccounts = np.unique(counts, return_counts=True)
-    normal_counts = np.ceil(len(counts) / c_values[0])
-    try:
-        assert len(ccounts) == normal_counts, f"{len(ccounts)} {normal_counts}"
-    except AssertionError as e:
-        print(f"AssertionError: {e}")
-
     # Map original IDs to 0..n-1
     unique_ids = np.unique(np.concatenate([rows[:, 0], rows[:, 1]]))
     id_to_idx = {id_: idx for idx, id_ in enumerate(unique_ids)}
     n = len(unique_ids)
+    print(f"Number of nodes: {n}")
     dist_matrix = np.zeros((n, n), dtype=float)
     # Vectorized remapping
     i_idx = np.vectorize(id_to_idx.get)(rows[:, 0])

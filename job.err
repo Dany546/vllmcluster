@@ -28,22 +28,18 @@ Activating Modules:
   1) CUDA/12.5.0
 
 wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-wandb: setting up run lhtk6u7m
+wandb: setting up run 2c88b83s
 wandb: Tracking run with wandb version 0.23.1
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251222_171417-lhtk6u7m
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251222_201615-2c88b83s
 wandb: Run `wandb offline` to turn off syncing.
-wandb: Syncing run knn
+wandb: Syncing run bumbling-disco-319
 wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
-wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/lhtk6u7m
-Traceback (most recent call last):
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 155, in <module>
-    main(args)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 113, in main
-    KNN(args)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 240, in KNN
-    tables = [
-             ^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 244, in <listcomp>
-    and table.split("/")[-1].split(".")[0] not in ["metrics", "umap", "tsne"]
-        ^^^^^
-NameError: cannot access free variable 'table' where it is not associated with a value in enclosing scope
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/2c88b83s
+[INFO] Found 5000 existing embeddings ...
+[INFO] All 5000 embeddings already computed
+[INFO] Computing distances for 5000 samples (79 x 79 blocks)...
+[INFO] Distance computation complete
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+[INFO] Computing embeddings from scratch...
+[INFO] Added 5000 new embeddings. Total: 5000
+[INFO] Computing distances for 5000 samples (79 x 79 blocks)...
