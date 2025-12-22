@@ -92,8 +92,9 @@ def load_distances(db_path):
     n = len(values)
     print(len(idx), len(counts))
     print(f"Number of nodes: {n}", rows.shape)
-    _, ccounts = np.unique(counts, return_counts=True)
-    assert len(ccounts) == len(counts), f"{len(ccounts)} {len(counts)}"
+    c_values, ccounts = np.unique(counts, return_counts=True)
+    normal_counts = np.ceil(len(counts) / c_values[0])
+    assert len(ccounts) == normal_counts, f"{len(ccounts)} {len(counts)}"
     dist_matrix = np.zeros((int(n), int(n)))
     # Vectorized assignment
     idx = np.arange(len(values))[idx]

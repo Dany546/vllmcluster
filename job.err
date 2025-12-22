@@ -28,20 +28,25 @@ Activating Modules:
   1) CUDA/12.5.0
 
 wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-wandb: setting up run nowu8wr9
 wandb: Tracking run with wandb version 0.23.1
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251219_183003-nowu8wr9
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251222_164837-ouxvqocm
 wandb: Run `wandb offline` to turn off syncing.
-wandb: Syncing run visu; 
+wandb: Syncing run knn
 wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
-wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/nowu8wr9
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/ouxvqocm
+wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+root - INFO - Computing 6 rows for table yolo12s
 Traceback (most recent call last):
   File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 155, in <module>
     main(args)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 109, in main
-    project(args)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/project.py", line 218, in project
-    compute_and_store_metrics(model_name, data, db_path=db_path)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/project.py", line 153, in compute_and_store_metrics
-    cur.execute(
-sqlite3.OperationalError: near "bat": syntax error
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 113, in main
+    KNN(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 275, in KNN
+    process_table(tasks[table_name], records, table, table_name)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 172, in process_table
+    distances = load_distances(table_path.replace("embeddings", "distances"))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/utils.py", line 97, in load_distances
+    assert len(ccounts) == normal_counts, f"{len(ccounts)} {len(counts)}"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 78 4992
