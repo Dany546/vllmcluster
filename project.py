@@ -74,13 +74,6 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     conn = sqlite3.connect(os.path.join(db_path, f"{algo}.db"))
     cur = conn.cursor()
 
-    # Insert metadata
-    cols = ", ".join(["model"] + list(hyperparams.keys()))
-    placeholders = ", ".join(
-        ["?"] * (len(hyperparams) + 1 + 1)
-    )  # run_id + model + hyperparams
-    sql = f"INSERT OR REPLACE INTO metadata(run_id, {cols}) VALUES ({placeholders})"
-    cur.execute(sql, (run_id, model_name, *hyperparams.values()))
     cur.execute("""
         CREATE TABLE IF NOT EXISTS embeddings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,11 +84,26 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
         )
     """)
     # Insert embeddings
-    for x, y in embedding:
-        cur.execute(
-            "INSERT INTO embeddings(run_id, x, y) VALUES (?, ?, ?)",
-            (run_id, float(x), float(y)),
-        )
+    rows = []
+    for i, (x, y) in enumerate(embedding):
+        if len(rows) >= 128:
+            cur.executemany(
+                "INSERT OR IGNORE INTO embeddings(run_id, x, y) VALUES (?, ?, ?)",
+                rows,
+            )
+            rows = []
+            conn.commit()
+        else:
+            rows.append((int(i), run_id, float(x), float(y)))
+    conn.commit()
+
+    # Insert metadata
+    cols = ", ".join(["model"] + list(hyperparams.keys()))
+    placeholders = ", ".join(
+        ["?"] * (len(hyperparams) + 1 + 1)
+    )  # run_id + model + hyperparams
+    sql = f"INSERT OR REPLACE INTO metadata(run_id, {cols}) VALUES ({placeholders})"
+    cur.execute(sql, (run_id, model_name, *hyperparams.values()))
 
     conn.commit()
     conn.close()
@@ -115,7 +123,6 @@ def compute_and_store_metrics(model_name, data, db_path=""):
     super_cols = ", ".join([f'"{sc}" INT' for sc in supercategories])
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS metrics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
             model TEXT,
             img_id TEXT,
             hit_freq FLOAT,
@@ -123,7 +130,8 @@ def compute_and_store_metrics(model_name, data, db_path=""):
             mean_conf FLOAT,
             {cat_cols},
             {super_cols},
-            FOREIGN KEY(model) REFERENCES metadata(model)
+            FOREIGN KEY(model) REFERENCES metadata(model),
+            PRIMARY KEY (model, img_id)
         )
     """)
 
@@ -154,9 +162,8 @@ def compute_and_store_metrics(model_name, data, db_path=""):
             f"""
             INSERT INTO metrics(model, img_id, hit_freq, mean_iou, mean_conf,
                                 {", ".join(categories)},
-                                {", ".join(supercategories)})
-            VALUES ({placeholders})
-        """,
+                                {", ".join(supercategories)}) VALUES ({placeholders})
+            """,
             values,
         )
 
@@ -206,8 +213,9 @@ def project(args):
         conn = sqlite3.connect(os.path.join(db_path, f"metrics.db"))
         cur = conn.cursor()
         try:
-            cur.execute("SELECT 1 FROM metrics WHERE model=?", (model_name,))
-            exists = cur.fetchone()
+            cur.execute("SELECT * FROM metrics WHERE model=?", (model_name,))
+            exists = cur.fetchall()
+            exists = len(exists) == 5000
         except Exception as e:
             exists = False
         conn.close()

@@ -24,13 +24,13 @@ cd ~/MIRO/vllmcluster
 # --- Trap signals ---
 # trap cleanup SIGINT SIGTERM EXIT
 
-cd $GLOBALSCRATCH/dino
-rm -rf embeddings/*clip*
-rm -rf distances/*clip*
-cd ~/MIRO/vllmcluster
+# cd $GLOBALSCRATCH/dino
+# rm -rf embeddings/*clip*
+# rm -rf distances/*clip*
+# cd ~/MIRO/vllmcluster
 
 source dino/bin/activate
-python main.py --model="dino,clip,yolov8s.pt,yolov8x.pt,yolo12s.pt,yolo12x.pt"
+# python main.py --model="dino,clip,yolov8s.pt,yolov8x.pt,yolo12s.pt,yolo12x.pt"
 # source visu/bin/activate
 # pip install ipywidgets IPython --quiet
 python main.py --visu

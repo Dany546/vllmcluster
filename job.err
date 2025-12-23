@@ -43,3 +43,322 @@ Using a slow image processor as `use_fast` is unset and a slow processor was sav
 [INFO] Computing embeddings from scratch...
 [INFO] Added 5000 new embeddings. Total: 5000
 [INFO] Computing distances for 5000 samples (79 x 79 blocks)...
+[INFO] Distance computation complete
+[INFO] Found 5000 existing embeddings ...
+[INFO] All 5000 embeddings already computed
+[INFO] Computing distances for 5000 samples (79 x 79 blocks)...
+[INFO] Distance computation complete
+[INFO] Found 5000 existing embeddings ...
+[INFO] All 5000 embeddings already computed
+[INFO] Computing distances for 5000 samples (79 x 79 blocks)...
+[INFO] Distance computation complete
+[INFO] Found 5000 existing embeddings ...
+[INFO] All 5000 embeddings already computed
+[INFO] Computing distances for 5000 samples (79 x 79 blocks)...
+[INFO] Distance computation complete
+[INFO] Found 5000 existing embeddings ...
+[INFO] All 5000 embeddings already computed
+[INFO] Computing distances for 5000 samples (79 x 79 blocks)...
+[INFO] Distance computation complete
+wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run p6n0so7c
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251222_203248-p6n0so7c
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run visu; 
+wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/p6n0so7c
+Traceback (most recent call last):
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 155, in <module>
+    main(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 109, in main
+    project(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/project.py", line 221, in project
+    compute_and_store_metrics(model_name, data, db_path=db_path)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/project.py", line 153, in compute_and_store_metrics
+    cur.execute(
+sqlite3.OperationalError: near "bear": syntax error
+wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 12whtpec
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251222_203255-12whtpec
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run knn
+wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/12whtpec
+wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+root - INFO - Computing 6 rows for table yolo12s
+root - INFO - Computing 6 rows for table yolov8x
+root - INFO - Computing 6 rows for table dino
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+root - INFO - Computing 6 rows for table yolov8s
+root - INFO - Computing 6 rows for table clip
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py:3045: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+root - INFO - Computing 6 rows for table yolo12x
+Traceback (most recent call last):
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/pandas/core/indexes/base.py", line 3812, in get_loc
+    return self._engine.get_loc(casted_key)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "pandas/_libs/index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/index.pyx", line 196, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7088, in pandas._libs.hashtable.PyObjectHashTable.get_item
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7096, in pandas._libs.hashtable.PyObjectHashTable.get_item
+KeyError: 'k'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 155, in <module>
+    main(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 113, in main
+    KNN(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 319, in KNN
+    fig = plot_results(df)
+          ^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 211, in plot_results
+    x=sub["k"],
+      ~~~^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/pandas/core/frame.py", line 4113, in __getitem__
+    indexer = self.columns.get_loc(key)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/pandas/core/indexes/base.py", line 3819, in get_loc
+    raise KeyError(key) from err
+KeyError: 'k'
