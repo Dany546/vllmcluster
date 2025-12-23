@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 from collections import defaultdict
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -61,30 +62,49 @@ def get_logger(debug):
     return logger
 
 
-def load_embeddings(db_path):
+def load_embeddings(db_path, query: Optional[str] = None):
+    print(f"Trying to load table {db_path}")
     conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM embeddings", conn)
-    df["embedding"] = df["embedding"].apply(
-        lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
-    )
-    # df["error"] = df["error"].apply(
-    #     lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
-    # )
-    conn.close()
-    return (
-        df["img_id"].values,
-        np.concatenate(df["embedding"].values),
-        df["hit_freq"].values,
-        df["mean_iou"].values,
-        df["mean_conf"].values,
-        df["flag_cat"].values,
-        df["flag_supercat"].values,
-    )
+    table_name = db_path.split("/")[-1].split(".")[0]
+    if table_name in ["umap", "tsne"]:
+        query = query.split(".")
+        df = pd.read_sql_query(
+            f"SELECT x,y FROM {query[1]} WHERE run_id={query[2]} ORDER BY id",
+            conn,
+        )
+        conn.close()
+        return df[["x", "y"]].values
+    else:
+        if query is None:
+            df = pd.read_sql_query("SELECT * FROM embeddings ORDER BY img_id", conn)
+            df["embedding"] = df["embedding"].apply(
+                lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
+            )
+            conn.close()
+            return (
+                df["img_id"].values,
+                np.concatenate(df["embedding"].values),
+                df["hit_freq"].values,
+                df["mean_iou"].values,
+                df["mean_conf"].values,
+                df["flag_cat"].values,
+                df["flag_supercat"].values,
+            )
+        else:
+            df = pd.read_sql_query(
+                f"SELECT {query} FROM embeddings ORDER BY img_id", conn
+            )
+            if query == "embedding":
+                df["embedding"] = df["embedding"].apply(
+                    lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
+                )
+            conn.close()
+            return df
 
 
 def load_distances(db_path):
     conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT i, j, distance FROM distances", conn)
+    df = pd.read_sql_query("SELECT i, j, distance FROM distances ORDER BY i, j", conn)
     conn.close()
     rows = df[["i", "j", "distance"]].values  # or cursor.fetchall() if you prefer
     rows = rows[np.lexsort((rows[:, 1], rows[:, 0]))]

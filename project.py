@@ -64,9 +64,9 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
 
     # Instantiate projector
     if algo == "tsne":
-        projector = TSNE(**hyperparams, n_components=2, random_state=42)
+        projector = TSNE(**hyperparams, random_state=42)
     else:
-        projector = UMAP(**hyperparams, n_components=2, random_state=42)
+        projector = UMAP(**hyperparams, random_state=42)
 
     embedding = projector.fit_transform(X)
 
@@ -88,14 +88,18 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     for i, (x, y) in enumerate(embedding):
         if len(rows) >= 128:
             cur.executemany(
-                "INSERT OR IGNORE INTO embeddings(run_id, x, y) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO embeddings(id, run_id, x, y) VALUES (?, ?, ?, ?)",
                 rows,
             )
             rows = []
             conn.commit()
         else:
             rows.append((int(i), run_id, float(x), float(y)))
-    conn.commit()
+
+    if len(rows) > 0:
+        query = f"""INSERT OR IGNORE INTO embeddings(id, run_id, x, y) VALUES (?, ?, ?, ?)"""
+        cur.executemany(query, rows)
+        conn.commit()
 
     # Insert metadata
     cols = ", ".join(["model"] + list(hyperparams.keys()))
@@ -124,7 +128,7 @@ def compute_and_store_metrics(model_name, data, db_path=""):
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS metrics (
             model TEXT,
-            img_id TEXT,
+            img_id INTEGER,
             hit_freq FLOAT,
             mean_iou FLOAT,
             mean_conf FLOAT,
@@ -135,6 +139,10 @@ def compute_and_store_metrics(model_name, data, db_path=""):
         )
     """)
 
+    cat_cols = cat_cols.replace(" INT", "")
+    super_cols = super_cols.replace(" INT", "")
+    placeholders = ", ".join(["?"] * (len(categories) + len(supercategories) + 5))
+    rows = []
     # Iterate over images
     for img_id, hf, miou, mconf, cat, supcat in zip(
         ids, hfs, mious, mconfs, cats, supercats
@@ -153,21 +161,26 @@ def compute_and_store_metrics(model_name, data, db_path=""):
             super_counts[supercat] += 1
 
         # Build row values
-        values = [model_name, img_id, hf, miou, mconf]
-        values += list(cat_counts.values())
-        values += list(super_counts.values())
+        values = [model_name, int(img_id), float(hf), float(miou), float(mconf)]
+        values += list(map(int, cat_counts.values()))
+        values += list(map(int, super_counts.values()))
 
-        placeholders = ", ".join(["?"] * len(values))
-        cur.execute(
-            f"""
-            INSERT INTO metrics(model, img_id, hit_freq, mean_iou, mean_conf,
-                                {", ".join(categories)},
-                                {", ".join(supercategories)}) VALUES ({placeholders})
-            """,
-            values,
-        )
+        if len(rows) >= 128:
+            query = f"""
+            INSERT OR IGNORE INTO metrics(model, img_id, hit_freq, mean_iou, mean_conf,
+                                {cat_cols}, {super_cols}) VALUES ({placeholders})
+            """
+            cur.executemany(query, rows)
+            rows = []
+            conn.commit()
+        else:
+            rows.append(values)
 
-    conn.commit()
+    if len(rows) > 0:
+        query = f"""INSERT OR IGNORE INTO metrics(model, img_id, hit_freq, mean_iou, mean_conf,
+                            {cat_cols}, {super_cols}) VALUES ({placeholders})"""
+        cur.executemany(query, rows)
+        conn.commit()
     conn.close()
 
 
@@ -178,7 +191,7 @@ def project(args):
     ]
     logger = get_logger(args.debug)
 
-    db_path = "/globalscratch/ucl/irec/darimez/dino/"
+    db_path = "/globalscratch/ucl/irec/darimez/dino/proj/"
     umap_params = {
         "n_neighbors": [15, 30, 60],
         "min_dist": [0.02, 0.1, 0.5],
@@ -189,7 +202,7 @@ def project(args):
         "perplexity": [10, 30, 50],
         "early_exaggeration": [8, 12, 16],
         "learning_rate": [100, 200, 500],
-        "n_iter": [1000],
+        "max_iter": [1000],
     }
 
     # Build hyperparam combinations
@@ -243,7 +256,7 @@ def project(args):
             cur.execute(f"""
                 CREATE TABLE IF NOT EXISTS metadata (
                     run_id TEXT,
-                    {cols},
+                    {cols}
                 )
             """)
             conn.commit()

@@ -4,10 +4,6 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=2G
 #SBATCH --job-name=dino
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --constraint='TeslaL40s|TeslaA100|TeslaA100_80'
-#SBATCH --qos=preemptible
 #SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.out
 #SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.err
 
@@ -33,7 +29,7 @@ source dino/bin/activate
 # python main.py --model="dino,clip,yolov8s.pt,yolov8x.pt,yolo12s.pt,yolo12x.pt"
 # source visu/bin/activate
 # pip install ipywidgets IPython --quiet
-python main.py --visu
+# python main.py --visu
 python main.py --knn
 
 # cleanup
