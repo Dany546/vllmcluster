@@ -187,9 +187,24 @@ def get_tasks(all_hyperparams, model_name):
         conn.commit()
         cur.execute("SELECT 1 FROM metadata WHERE run_id=?", (run_id,))
         exists = cur.fetchone()
-        conn.close()
         if exists is None:
             tasks.append(hyperparam)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT,
+                    x FLOAT,
+                    y FLOAT,
+                FOREIGN KEY(run_id) REFERENCES metadata(run_id)
+                )
+            """)
+            cur.execute("SELECT COUNT(*) FROM embeddings WHERE run_id=?", (run_id,))
+            print(cur.fetchone()[0])
+            exists = cur.fetchone()[0] == 5000
+            if not exists:
+                tasks.append(hyperparam)
+        conn.close()
     return tasks
 
 

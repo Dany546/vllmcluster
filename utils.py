@@ -74,7 +74,6 @@ def load_embeddings(db_path, query: Optional[str] = None):
             f"SELECT run_id FROM embeddings ORDER BY id",
             conn,
         )
-        print(df)
         df = pd.read_sql_query(
             f"SELECT x,y FROM embeddings WHERE run_id='{query}' ORDER BY id",
             conn,
@@ -88,6 +87,7 @@ def load_embeddings(db_path, query: Optional[str] = None):
                 lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
             )
             conn.close()
+            print(len(df["img_id"].values))
             return (
                 df["img_id"].values,
                 np.concatenate(df["embedding"].values),

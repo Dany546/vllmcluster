@@ -29,8 +29,8 @@ source dino/bin/activate
 # python main.py --model="dino,clip,yolov8s.pt,yolov8x.pt,yolo12s.pt,yolo12x.pt"
 # source visu/bin/activate
 # pip install ipywidgets IPython --quiet
-# python main.py --visu
-python main.py --knn
+python main.py --visu
+# python main.py --knn
 
 # cleanup
 

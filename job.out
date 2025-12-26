@@ -1,11 +1,5 @@
-Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/dino.db
-Number of nodes: 5000
 Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolo12s.db
-Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolov8x.db
-Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolov8s.db
-Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolo12x.db
-Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolo12s.db
-Loading embeddings from /globalscratch/ucl/irec/darimez/dino/proj/tsne.db
+5000
 [1;34mwandb[0m: 
-[1;34mwandb[0m: 🚀 View run [33mknn[0m at: [34mhttps://wandb.ai/miro-unet/VLLM%20clustering/runs/gxxw0m5n[0m
-[1;34mwandb[0m: Find logs at: [1;35m../../../../../../auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251226_002210-gxxw0m5n/logs[0m
+[1;34mwandb[0m: 🚀 View run [33mvisu; [0m at: [34mhttps://wandb.ai/miro-unet/VLLM%20clustering/runs/ffokyav6[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../../../../../auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251226_140417-ffokyav6/logs[0m

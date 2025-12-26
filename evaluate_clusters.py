@@ -169,7 +169,7 @@ def get_lower_dim_tables():
 def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    targets = ["hit_freq", "mean_iou", "supercats"]
+    targets = ["hit_freq", "mean_iou", "flag_supercat"]
     k_targ = list(itertools.product(neighbor_grid, targets))
     tasks = {}  # list of (table_name, k)
     lower_dim_names, lower_dim_tables = get_lower_dim_tables()
@@ -240,7 +240,7 @@ def work_fn(args):
     records = []
     precomputed = distances.shape[0] == distances.shape[1]
 
-    categorical_target = target_name in ["cats", "supercats"]
+    categorical_target = target_name in ["flag_cat", "flag_supercat"]
     if categorical_target:
         target = decode(target)
     KNN_class = KNeighborsClassifier if categorical_target else KNeighborsRegressor
@@ -303,8 +303,8 @@ def process_table(args_list, results, table_path, table_name):
         "hit_freq": hfs,
         "mean_iou": mious,
         "mean_conf": mconfs,
-        "cats": cats,
-        "supercats": supercats,
+        "flag_cat": cats,
+        "flag_supercat": supercats,
     }
     distances = load_distances(table_path.replace("embeddings", "distances"))
     kf = KFold(n_splits=args_list[0][3], shuffle=True, random_state=args_list[0][2])
