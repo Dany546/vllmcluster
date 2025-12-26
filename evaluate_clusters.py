@@ -1,3 +1,4 @@
+import itertools
 import os
 import sqlite3
 from multiprocessing import Pool
@@ -5,9 +6,15 @@ from time import time
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import (
+    accuracy_score,
+    adjusted_rand_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+)
 from sklearn.model_selection import KFold
-from sklearn.neighbors import KNeighborsRegressor
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from utils import get_logger, load_distances, load_embeddings
 
 import wandb
@@ -41,10 +48,11 @@ def init_db():
             cv_type TEXT,
             distance_metric TEXT,
             fold INTEGER,
+            target TEXT,
             mae REAL,
             r2 REAL,
             corr REAL,
-            PRIMARY KEY(model, k, random_state, num_folds, cv_type, distance_metric, fold)
+            PRIMARY KEY(model, k, random_state, num_folds, cv_type, distance_metric, fold, target)
         )
     """)
 
@@ -52,14 +60,47 @@ def init_db():
     conn.close()
 
 
-def already_computed(model, k, random_state, num_folds, cv_type, distance_metric, c):
+def ensure_column_exists(c, table_name, column_name, column_type="TEXT"):
+    # Check schema
+    c.execute(f"PRAGMA table_info({table_name})")
+    columns = [row[1] for row in c.fetchall()]  # row[1] is column name
+    if column_name not in columns:
+        # Add column if missing
+        c.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def already_computed(
+    model,
+    k,
+    random_state,
+    num_folds,
+    cv_type,
+    distance_metric,
+    other_columns=None,
+    c: sqlite3.Cursor = None,
+):
+    if other_columns is None:
+        other_columns = {}
+        query = ""
+    else:
+        query = " AND " + "=? AND ".join(other_columns.keys()) + "=?"
+    for col, col_type in other_columns.items():
+        ensure_column_exists(c, "knn_results", col, col_type)
+
+    query = (
+        "model=? AND k=? AND random_state=? AND num_folds=? AND cv_type=? AND distance_metric=?"
+        + query
+    )
+    keys = (model, k, random_state, num_folds, cv_type, distance_metric) + tuple(
+        other_columns.values()
+    )
     c.execute(
-        """
+        f"""
         SELECT 1 FROM knn_results
-        WHERE model=? AND k=? AND random_state=? AND num_folds=? AND cv_type=? AND distance_metric=?
+        WHERE {query}
         LIMIT 1
-    """,
-        (model, k, random_state, num_folds, cv_type, distance_metric),
+        """,
+        keys,
     )
     exists = c.fetchone()
     return exists is not None
@@ -68,23 +109,15 @@ def already_computed(model, k, random_state, num_folds, cv_type, distance_metric
 def insert_record(record, c):
     for attempt in range(10):
         try:
+            query = tuple(record.keys())
+            placeholders = ", ".join(["?"] * len(query))
+            values = tuple(record.values())
             c.execute(
-                """
-                INSERT OR IGNORE INTO knn_results (model, k, random_state, num_folds, cv_type, distance_metric, fold, mae, r2, corr)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""
+                INSERT OR IGNORE INTO knn_results ({", ".join(query)})
+                VALUES ({placeholders})
             """,
-                (
-                    record["model"],
-                    record["k"],
-                    record["random_state"],
-                    record["num_folds"],
-                    record["cv_type"],
-                    record["distance_metric"],
-                    record["fold"],
-                    record["mae"],
-                    record["r2"],
-                    record["corr"],
-                ),
+                values,
             )
             return True
         except sqlite3.OperationalError as e:
@@ -105,26 +138,39 @@ def get_lower_dim_tables():
             and file.split("/")[-1].split(".")[0] not in ["metrics"]
         )
     ]
-    lower_dim_tables = []
+    for db in ["tsne.db", "umap.db"]:
+        conn = sqlite3.connect(os.path.join(db_path, db))
+        c = conn.cursor()
+        c.execute(
+            """ DELETE FROM metadata WHERE run_id NOT IN ( SELECT DISTINCT run_id FROM embeddings ); """
+        )
+        conn.commit()
+    # Load embedding runs
+    tables = []
     table_names = []
     for lower_table in lower_dim_tables:
         lower_table_name = lower_table.split("/")[-1].split(".")[0]
         conn = sqlite3.connect(lower_table)
         c = conn.cursor()
-        c.execute(f"SELECT run_id, model FROM metadata ORDER BY model")
+        embed_runs = {
+            row[0] for row in c.execute("SELECT DISTINCT run_id FROM embeddings")
+        }
         new_tables = [
-            f"{model}.{lower_table_name}.{run_id}" for run_id, model in c.fetchall()
+            f"{run_id.split('_')[0]}.{lower_table_name}.{run_id.split('_')[-1]}"
+            for run_id in embed_runs
         ]
-        lower_dim_tables.extend([lower_table] * len(new_tables))
+        tables.extend([lower_table] * len(new_tables))
         table_names.extend(new_tables)
         conn.close()
 
-    return table_names, lower_dim_tables
+    return table_names, tables
 
 
 def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    targets = ["hit_freq", "mean_iou", "supercats"]
+    k_targ = list(itertools.product(neighbor_grid, targets))
     tasks = {}  # list of (table_name, k)
     lower_dim_names, lower_dim_tables = get_lower_dim_tables()
     table_names = [
@@ -132,39 +178,58 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
     ] + lower_dim_names
     tables = tables + lower_dim_tables
     for table, table_name in zip(tables, table_names):
-        table_pairs = (
-            [table_name]
-            if table_name not in ("clip", "dino")
-            else [
-                "_".join([table_name, tn])
+        if ("clip" in table_name) or ("dino" in table_name):
+            # Pair CLIP/DINO models with all non-CLIP/DINO models
+            table_pairs = [
+                f"{table_name}_{tn}"
                 for tn in table_names
-                if tn not in ("clip", "dino")
+                if ("clip" not in tn) and ("dino" not in tn)
             ]
-        )
-        for k in neighbor_grid:
-            for table_pair in table_pairs:
-                if not already_computed(
-                    table_pair, k, RN, num_folds, "kfold", distance_metric, c
-                ):
-                    if table_name not in tasks:
-                        tasks[table_name] = []
-                    tasks[table_name].append(
-                        (table_pair, k, RN, num_folds, "kfold", distance_metric)
+        else:
+            # YOLO models remain singletons
+            table_pairs = [table_name]
+
+        k_targ_per_table = itertools.product(k_targ, table_pairs)
+        for (k, target), table_pair in k_targ_per_table:
+            other_columns = {"target": target}
+            if not already_computed(
+                table_pair, k, RN, num_folds, "kfold", distance_metric, other_columns, c
+            ):
+                tasks.setdefault(table_name, []).append(
+                    (
+                        table_pair,
+                        k,
+                        RN,
+                        num_folds,
+                        "kfold",
+                        distance_metric,
+                        target,
                     )
+                )
     conn.close()
     return tasks
+
+
+def decode(x):
+    for ix, xx in enumerate(x):
+        if isinstance(xx, bytes):
+            x[ix] = int.from_bytes(xx, "little")
+        else:
+            x[ix] = int(xx)
+    return np.array(x, dtype=int).ravel()
 
 
 def work_fn(args):
     (
         distances,
-        mious,
+        target,
         model_name,
         k,
         random_state,
         num_folds,
         cv_type,
         distance_metric,
+        target_name,
         kf,
     ) = args
 
@@ -173,19 +238,30 @@ def work_fn(args):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     records = []
+    precomputed = distances.shape[0] == distances.shape[1]
+
+    categorical_target = target_name in ["cats", "supercats"]
+    if categorical_target:
+        target = decode(target)
+    KNN_class = KNeighborsClassifier if categorical_target else KNeighborsRegressor
     try:
         for fold_id, (tr_idx, te_idx) in enumerate(folds):
             # compute KNN fold
-            D_train = distances[tr_idx][:, tr_idx]
-            D_test = distances[te_idx][:, tr_idx]
+            if precomputed:
+                D_train = distances[tr_idx][:, tr_idx]
+                D_test = distances[te_idx][:, tr_idx]
+            else:
+                D_train = distances[tr_idx]
+                D_test = distances[te_idx]
 
-            y_train = mious[tr_idx]
-            y_test = mious[te_idx]
+            y_train = target[tr_idx]
+            y_test = target[te_idx]
 
-            knn = KNeighborsRegressor(
+            distance_method = "uniform" if "uniform" in distance_metric else "distance"
+            knn = KNN_class(
                 n_neighbors=k,
-                metric="precomputed",
-                weights="unifrom" if "uniform" in distance_metric else "distance",
+                metric="precomputed" if precomputed else "minkowski",
+                weights=distance_method,
             )
 
             knn.fit(D_train, y_train)
@@ -199,9 +275,14 @@ def work_fn(args):
                 "random_state": random_state,
                 "distance_metric": distance_metric,
                 "fold": fold_id,
-                "mae": mean_absolute_error(y_test, y_pred),
+                "target": target_name,
+                "mae": accuracy_score(y_test, y_pred)
+                if categorical_target
+                else mean_absolute_error(y_test, y_pred),
                 "r2": r2_score(y_test, y_pred),
-                "corr": np.corrcoef(y_test, y_pred)[0, 1],
+                "corr": adjusted_rand_score(y_test, y_pred)
+                if categorical_target
+                else np.corrcoef(y_test, y_pred)[0, 1],
             }
             records.append(record)
             success = insert_record(record, c)
@@ -213,36 +294,44 @@ def work_fn(args):
         raise e
     finally:
         conn.close()
-        return records
+    return records
 
 
 def process_table(args_list, results, table_path, table_name):
     ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table_path)
+    targets = {
+        "hit_freq": hfs,
+        "mean_iou": mious,
+        "mean_conf": mconfs,
+        "cats": cats,
+        "supercats": supercats,
+    }
     distances = load_distances(table_path.replace("embeddings", "distances"))
     kf = KFold(n_splits=args_list[0][3], shuffle=True, random_state=args_list[0][2])
 
     new_args_list = []
     for args in args_list:
-        new_args = [args]
+        new_args = list(args)
         if "_" in args[0]:  # need target error from other models
             root = os.path.dirname(table_path)
-            other_mious = load_embeddings(
-                os.path.join(root, f"{args[0].split('_')[1]}.db"),
-                "mean_iou",
-            )["mean_iou"].values
-            new_args = [other_mious] + new_args + [kf]
+            other_targ = load_embeddings(
+                os.path.join(root, f"{args[0].split('.')[0].split('_')[1]}.db"),
+                args[-1],
+            )[args[-1]].values
+            new_args = [other_targ] + new_args + [kf]
         else:
-            new_args = [mious] + new_args + [kf]
-        if "." in args[0]:  # need target error from other models
+            new_args = [targets[args[-1]]] + new_args + [kf]
+        if "." in args[0]:  # need embeddings from projections
+            path = table_path.replace("embeddings", "proj")
+            path = "/".join(path.split("/")[:-1])
+            path = path + f"/{args[0].split('.')[1]}.db"
             embeddings = load_embeddings(
-                os.path.join(
-                    table_path.replace("embeddings", "proj"), f"{args[0][1]}.db"
-                ),
+                path,
                 query=args[0],
             )
-            new_args = [embeddings] + new_args + [kf]
+            new_args = [embeddings] + new_args
         else:
-            new_args = [distances] + new_args + [kf]
+            new_args = [distances] + new_args
         new_args_list.append(new_args)
     for args in new_args_list:
         results.extend(work_fn(args))
@@ -260,75 +349,98 @@ def plot_results(df):
     )["merged"]
     df.drop(columns=["distance_metric"], inplace=True)
 
-    metrics = ["mae", "r2", "corr"]
-    colors = px.colors.qualitative.Pastel
+    grid = {
+        "target": ["hit_freq", "mean_iou", "mean_conf", "cats", "supercats"],
+        "target_name": [
+            "Hit Frequency",
+            "Mean IoU",
+            "Mean Confidence",
+            "Categories",
+            "Super Categories",
+        ],
+        "metrics": ["corr", "mae", "r2"],
+        "metrics_name": ["Correlation", "Mean Absolute Error", "R-squared"],
+    }
 
+    colors = px.colors.qualitative.Pastel
     fig = go.Figure()
 
-    # Add one trace per metric per model
-    for metric in metrics:
-        models = df["model"].unique()
-        models = [m for m in models if not m in ("clip", "dino")]
+    models = [m for m in df["model"].unique() if m not in ("clip", "dino")]
+    n_models = len(models)
+    n_targets = len(grid["target"])
+    n_metrics = len(grid["metrics"])
+
+    # Add traces: metric × target × model
+    for metric, target in itertools.product(grid["metrics"], grid["target"]):
         for i, model in enumerate(models):
-            sub = df[df["model"] == model]
+            sub = df[(df["model"] == model) & (df["target"] == target)]
             fig.add_trace(
                 go.Box(
                     x=sub["k"],
                     y=sub[metric],
-                    name=f"{model} ({metric})",
+                    name=f"{model}",
                     marker_color=colors[i % len(colors)],
                     boxmean=True,
-                    visible=(metric == "mae"),  # only MAE visible at start
+                    visible=(metric == "corr" and target == "mean_iou"),
                 )
             )
 
-    # Build dropdown menu
-    buttons = []
+    # Metric ranges
     metric_ranges = {
-        m: _range
-        for m, _range in zip(
-            metrics, [[0, df["mae"].max() + 0.05], [df["r2"].min() - 0.05, 1], [-1, 1]]
-        )
+        "corr": [-1, 1],
+        "mae": [0, df["mae"].max() + 0.05],
+        "r2": [df["r2"].min() - 0.05, 1],
     }
-    n_models = df["model"].nunique()
 
-    for m_idx, metric in enumerate(metrics):
-        visibility = []
-        for i in range(len(metrics)):
-            for _ in range(n_models):
-                visibility.append(i == m_idx)
+    # Default selections for coordination
+    default_metric_idx = 0  # corr
+    default_target_idx = 1  # mean_iou
 
-        buttons.append(
-            dict(
-                label=metric.upper(),
-                method="update",
-                args=[
-                    {"visible": visibility},
-                    {
-                        "title": f"{metric.upper()} distribution per k",
-                        "yaxis": {"range": metric_ranges[metric]},
-                    },
-                ],
+    # Metric dropdown - each button shows that metric with ALL targets
+    metric_buttons = []
+    for m_idx, (metric, metric_name) in enumerate(
+        zip(grid["metrics"], grid["metrics_name"])
+    ):
+        # Create sub-buttons for each target
+        for t_idx, (target, target_name) in enumerate(
+            zip(grid["target"], grid["target_name"])
+        ):
+            visibility = [
+                (trace_idx // (n_targets * n_models)) == m_idx
+                and ((trace_idx % (n_targets * n_models)) // n_models) == t_idx
+                for trace_idx in range(n_metrics * n_targets * n_models)
+            ]
+            metric_buttons.append(
+                dict(
+                    label=f"{metric_name} - {target_name}",
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {
+                            "yaxis.range": metric_ranges[metric],
+                            "title": f"{metric_name} - {target_name}",
+                        },
+                    ],
+                )
             )
-        )
 
     fig.update_layout(
         updatemenus=[
             dict(
                 type="dropdown",
-                x=1.15,
-                y=0.5,
+                x=0.0,
+                y=1.15,
                 showactive=True,
-                buttons=buttons,
-            )
+                buttons=metric_buttons,
+            ),
         ],
-        title="MAE distribution per k",
-        xaxis_title="k",
-        yaxis_title="Metric value",
+        title=f"{grid['metrics_name'][default_metric_idx]} - {grid['target_name'][default_target_idx]}",
+        xaxis_title="k neighbors",
+        yaxis_title="metric value",
+        yaxis_range=metric_ranges[grid["metrics"][default_metric_idx]],
         template="plotly_white",
         boxmode="group",
     )
-
     return fig
 
 
@@ -357,7 +469,6 @@ def KNN(args):
     num_folds = 10
     distance_metric = "euclidean"
     tasks = get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric)
-    print("Tasks:", tasks)
 
     if len(tasks) > 0:
         records = []

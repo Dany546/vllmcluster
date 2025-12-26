@@ -10,30 +10,7 @@ import numpy as np
 import pandas as pd
 from sklearn.manifold import TSNE
 from umap import UMAP
-from utils import dict_to_filename, get_logger, get_lookups
-
-
-# Load embeddings from SQL
-def load_embeddings(db_path):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    df = pd.read_sql_query("SELECT * FROM embeddings", conn)
-    df["embedding"] = df["embedding"].apply(
-        lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
-    )
-    # df["error"] = df["error"].apply(
-    #     lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
-    # )
-    conn.close()
-    return (
-        df["img_id"].values,
-        np.concatenate(df["embedding"].values),
-        df["hit_freq"].values,
-        df["mean_iou"].values,
-        df["mean_conf"].values,
-        df["flag_cat"].values,
-        df["flag_supercat"].values,
-    )
+from utils import dict_to_filename, get_logger, get_lookups, load_embeddings
 
 
 def compute_run_id(model: str, hyperparams: dict) -> str:
@@ -97,7 +74,9 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
             rows.append((int(i), run_id, float(x), float(y)))
 
     if len(rows) > 0:
-        query = f"""INSERT OR IGNORE INTO embeddings(id, run_id, x, y) VALUES (?, ?, ?, ?)"""
+        query = (
+            """INSERT OR IGNORE INTO embeddings(id, run_id, x, y) VALUES (?, ?, ?, ?)"""
+        )
         cur.executemany(query, rows)
         conn.commit()
 
@@ -106,7 +85,7 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     placeholders = ", ".join(
         ["?"] * (len(hyperparams) + 1 + 1)
     )  # run_id + model + hyperparams
-    sql = f"INSERT OR REPLACE INTO metadata(run_id, {cols}) VALUES ({placeholders})"
+    sql = f"INSERT INTO metadata(run_id, {cols}) VALUES ({placeholders})"
     cur.execute(sql, (run_id, model_name, *hyperparams.values()))
 
     conn.commit()
@@ -184,6 +163,36 @@ def compute_and_store_metrics(model_name, data, db_path=""):
     conn.close()
 
 
+def get_tasks(all_hyperparams, model_name):
+    tasks = []
+    for hyperparam in all_hyperparams:
+        algo = hyperparam["algo"]
+        run_id = compute_run_id(
+            model_name, {k: v for k, v in hyperparam.items() if k != "algo"}
+        )
+        # Check if run_id already exists in metadata
+        conn = sqlite3.connect(
+            os.path.join("/globalscratch/ucl/irec/darimez/dino/proj/", f"{algo}.db")
+        )
+        cur = conn.cursor()
+        cols = ", ".join(
+            ["model TEXT"] + list(str(h) + " REAL" for h in hyperparam.keys())
+        )
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS metadata (
+                run_id TEXT,
+                {cols}
+            )
+        """)
+        conn.commit()
+        cur.execute("SELECT 1 FROM metadata WHERE run_id=?", (run_id,))
+        exists = cur.fetchone()
+        conn.close()
+        if exists is None:
+            tasks.append(hyperparam)
+    return tasks
+
+
 def project(args):
     db_path = "/globalscratch/ucl/irec/darimez/dino/embeddings/"
     tables = [
@@ -216,6 +225,20 @@ def project(args):
     all_hyperparams = list(expand_params(umap_params, "umap")) + list(
         expand_params(tsne_params, "tsne")
     )
+    # deletes failed entries from embeddings
+    for db in ["tsne.db", "umap.db"]:
+        conn = sqlite3.connect(
+            os.path.join("/globalscratch/ucl/irec/darimez/dino/proj/", db)
+        )
+        c = conn.cursor()
+        try:
+            c.execute(
+                """ DELETE FROM metadata WHERE run_id NOT IN ( SELECT DISTINCT run_id FROM embeddings ); """
+            )
+        except Exception as e:
+            print(e)
+        conn.commit()
+        conn.close()
 
     for table in tables:
         model_name = os.path.basename(table).split(".")[0]
@@ -226,55 +249,31 @@ def project(args):
         conn = sqlite3.connect(os.path.join(db_path, f"metrics.db"))
         cur = conn.cursor()
         try:
-            cur.execute("SELECT * FROM metrics WHERE model=?", (model_name,))
-            exists = cur.fetchall()
-            exists = len(exists) == 5000
+            cur.execute("SELECT COUNT(*) FROM metrics WHERE model=?", (model_name,))
+            exists = cur.fetchone()[0] == 5000
         except Exception as e:
             exists = False
         conn.close()
         if exists:
-            logger.debug(f"Loading existing metrics for model {model_name}")
+            logger.info(f"Loading existing metrics for model {model_name}")
             continue
         else:
-            logger.debug(f"Saving metrics for model {model_name}")
+            logger.info(f"Saving metrics for model {model_name}")
             ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
             data = (ids, hfs, mious, mconfs, cats, supercats)
             compute_and_store_metrics(model_name, data, db_path=db_path)
 
-        for hyperparam in all_hyperparams:
-            algo = hyperparam["algo"]
-            run_id = compute_run_id(
-                model_name, {k: v for k, v in hyperparam.items() if k != "algo"}
+        tasks = get_tasks(all_hyperparams, model_name)
+        logger.info(
+            f"Computing projections for {len(tasks)}/{len(all_hyperparams)} parameters"
+        )
+        for task in tasks:
+            if X is None:
+                ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
+            compute_and_store(
+                X,
+                model_name,
+                {k: v for k, v in task.items() if k != "algo"},
+                db_path=db_path,
+                algo=task["algo"],
             )
-
-            # Check if run_id already exists in metadata
-            conn = sqlite3.connect(os.path.join(db_path, f"{algo}.db"))
-            cur = conn.cursor()
-            cols = ", ".join(
-                ["model TEXT"] + list(str(h) + " REAL" for h in hyperparam.keys())
-            )
-            cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS metadata (
-                    run_id TEXT,
-                    {cols}
-                )
-            """)
-            conn.commit()
-            cur.execute("SELECT 1 FROM metadata WHERE run_id=?", (run_id,))
-            exists = cur.fetchone()
-            conn.close()
-            if exists:
-                logger.debug(f"Skipping existing run {run_id}")
-                continue
-            else:
-                # Compute and store embeddings
-                logger.debug(f"Computing ...")
-                if X is None:
-                    ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
-                compute_and_store(
-                    X,
-                    model_name,
-                    {k: v for k, v in hyperparam.items() if k != "algo"},
-                    db_path=db_path,
-                    algo=algo,
-                )

@@ -63,13 +63,20 @@ def get_logger(debug):
 
 
 def load_embeddings(db_path, query: Optional[str] = None):
-    print(f"Trying to load table {db_path}")
     conn = sqlite3.connect(db_path)
+    print("Loading embeddings from", db_path)
     table_name = db_path.split("/")[-1].split(".")[0]
     if table_name in ["umap", "tsne"]:
         query = query.split(".")
+        model_name = query[0].split("_")[-1]
+        query = "_".join([model_name, query[2]])
         df = pd.read_sql_query(
-            f"SELECT x,y FROM {query[1]} WHERE run_id={query[2]} ORDER BY id",
+            f"SELECT run_id FROM embeddings ORDER BY id",
+            conn,
+        )
+        print(df)
+        df = pd.read_sql_query(
+            f"SELECT x,y FROM embeddings WHERE run_id='{query}' ORDER BY id",
             conn,
         )
         conn.close()

@@ -28,26 +28,40 @@ Activating Modules:
   1) CUDA/12.5.0
 
 wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-wandb: setting up run prm7746j
 wandb: Tracking run with wandb version 0.23.1
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251223_155242-prm7746j
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251226_002210-gxxw0m5n
 wandb: Run `wandb offline` to turn off syncing.
 wandb: Syncing run knn
 wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
-wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/prm7746j
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/gxxw0m5n
 wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-root - INFO - Computing 24 rows for table dino
+root - INFO - Computing 2016 rows for table dino
+Traceback (most recent call last):
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/pandas/io/sql.py", line 2664, in execute
+    cur.execute(sql, *args)
+sqlite3.OperationalError: no such column: yolo12s_cb96d590
+
+The above exception was the direct cause of the following exception:
+
 Traceback (most recent call last):
   File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 155, in <module>
     main(args)
   File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 113, in main
     KNN(args)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 373, in KNN
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 475, in KNN
     process_table(tasks[table_name], records, table, table_name)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 228, in process_table
-    other_mious = load_embeddings(
-                  ^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/utils.py", line 67, in load_embeddings
-    conn = sqlite3.connect(db_path)
-           ^^^^^^^^^^^^^^^^^^^^^^^^
-sqlite3.OperationalError: unable to open database file
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 318, in process_table
+    embeddings = load_embeddings(
+                 ^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/utils.py", line 73, in load_embeddings
+    df = pd.read_sql_query(
+         ^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/pandas/io/sql.py", line 528, in read_sql_query
+    return pandas_sql.read_query(
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/pandas/io/sql.py", line 2728, in read_query
+    cursor = self.execute(sql, params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/pandas/io/sql.py", line 2676, in execute
+    raise ex from exc
+pandas.errors.DatabaseError: Execution failed on sql 'SELECT x,y FROM embeddings WHERE run_id=yolo12s_cb96d590 ORDER BY id': no such column: yolo12s_cb96d590

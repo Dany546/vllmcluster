@@ -150,8 +150,8 @@ class yolowrapper(torch.nn.Module):
                         img_idx,
                         np.array([0], dtype=np.float32),
                         np.array([1], dtype=np.float32),
-                        np.array([most_frequent_cat], dtype=np.float32),
-                        np.array([most_frequent_supercat], dtype=np.float32),
+                        np.array([most_frequent_cat], dtype=np.int64),
+                        np.array([most_frequent_supercat], dtype=np.int64),
                     ]
                 )
         return matched, all
