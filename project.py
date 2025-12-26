@@ -70,8 +70,7 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
             )
             rows = []
             conn.commit()
-        else:
-            rows.append((int(i), run_id, float(x), float(y)))
+        rows.append((int(i), run_id, float(x), float(y)))
 
     if len(rows) > 0:
         query = (
@@ -152,8 +151,7 @@ def compute_and_store_metrics(model_name, data, db_path=""):
             cur.executemany(query, rows)
             rows = []
             conn.commit()
-        else:
-            rows.append(values)
+        rows.append(values)
 
     if len(rows) > 0:
         query = f"""INSERT OR IGNORE INTO metrics(model, img_id, hit_freq, mean_iou, mean_conf,
@@ -186,7 +184,7 @@ def get_tasks(all_hyperparams, model_name):
         """)
         conn.commit()
         cur.execute("SELECT 1 FROM metadata WHERE run_id=?", (run_id,))
-        exists = cur.fetchone()
+        exists = cur.fetchone() 
         if exists is None:
             tasks.append(hyperparam)
         else:
@@ -200,8 +198,8 @@ def get_tasks(all_hyperparams, model_name):
                 )
             """)
             cur.execute("SELECT COUNT(*) FROM embeddings WHERE run_id=?", (run_id,))
-            print(cur.fetchone()[0])
-            exists = cur.fetchone()[0] == 5000
+            count = cur.fetchone()
+            exists = count[0] == 5000 if count else False 
             if not exists:
                 tasks.append(hyperparam)
         conn.close()
