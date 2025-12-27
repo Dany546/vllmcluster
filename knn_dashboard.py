@@ -1,17 +1,93 @@
 """
 Interactive Dash dashboard for KNN clustering results filtering.
 Allows users to toggle traces by text query (substring match, case-insensitive).
+
+Usage:
+    # Run on cluster (default):
+    python knn_dashboard.py
+    
+    # Run locally with local DB copy:
+    python knn_dashboard.py --local --db-path ~/local_knn.db
+    
+    # Run with custom DB path:
+    python knn_dashboard.py --db-path /path/to/knn_results.db
 """
 
+import argparse
 import sqlite3
 import json
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output, State, callback
 import dash_bootstrap_components as dbc
+import os
 
-# Database configuration
-DB_PATH = "/globalscratch/ucl/irec/darimez/dino/knn_results.db"
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Interactive KNN Results Dashboard"
+    )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help="Path to KNN results database (SQLite). "
+             "Default: /globalscratch/ucl/irec/darimez/dino/knn_results.db (cluster)",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Use local database copy (expects ~/knn_results.db)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Host to run Dash server on. Default: 127.0.0.1 (local only)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8050,
+        help="Port for Dash server. Default: 8050",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Run in debug mode",
+    )
+    return parser.parse_args()
+
+
+def get_db_path(args):
+    """Determine database path based on arguments."""
+    if args.db_path:
+        # User specified explicit path
+        return args.db_path
+    elif args.local:
+        # Use local copy
+        local_path = os.path.expanduser("~/knn_results.db")
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(
+                f"Local database not found at {local_path}. "
+                "Copy it from cluster first: "
+                "rsync -avz user@cluster:/globalscratch/.../knn_results.db ~/"
+            )
+        return local_path
+    else:
+        # Default: cluster path
+        cluster_path = "/globalscratch/ucl/irec/darimez/dino/knn_results.db"
+        return cluster_path
+
+
+# Parse command-line arguments early
+args = parse_args()
+DB_PATH = get_db_path(args)
+
+print(f"[KNN Dashboard] Using database: {DB_PATH}")
+print(f"[KNN Dashboard] Serving on http://{args.host}:{args.port}")
+
 
 
 def load_knn_results():
@@ -41,11 +117,17 @@ def create_initial_figure(df, x_axis="k"):
         fig.add_annotation(text="No KNN results found in database.")
         return fig
 
-    # Merge model and distance_metric for cleaner trace names
-    df["model"] = df.assign(
-        merged=df[["model", "distance_metric"]].astype(str).agg("_".join, axis=1)
-    )["merged"]
-    df.drop(columns=["distance_metric"], inplace=True)
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+    
+    print(f"[DEBUG] Columns in dataframe: {df.columns.tolist()}")
+    print(f"[DEBUG] DataFrame shape: {df.shape}")
+    
+    # Merge model and distance_metric for cleaner trace names (if distance_metric exists)
+    if "distance_metric" in df.columns:
+        df["model_full"] = df[["model", "distance_metric"]].astype(str).agg("_".join, axis=1)
+    else:
+        df["model_full"] = df["model"]
 
     grid = {
         "target": ["hit_freq", "mean_iou", "mean_conf", "flag_cat", "flag_supercat"],
@@ -67,15 +149,17 @@ def create_initial_figure(df, x_axis="k"):
 
     fig = go.Figure()
 
-    models = [m for m in df["model"].unique() if m not in ("clip", "dino")]
+    models = [m for m in df["model_full"].unique() if m not in ("clip", "dino")]
     n_models = len(models)
     n_targets = len(grid["target"])
     n_metrics = len(grid["metrics"])
 
+    print(f"[DEBUG] Found {n_models} models: {models}")
+
     # Add traces: metric × target × model
     for metric, target in [(m, t) for m in grid["metrics"] for t in grid["target"]]:
         for i, model in enumerate(models):
-            sub = df[(df["model"] == model) & (df["target"] == target)]
+            sub = df[(df["model_full"] == model) & (df["target"] == target)]
             if sub.empty:
                 continue
             fig.add_trace(
@@ -291,4 +375,4 @@ def filter_input_handler(value):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True, host="0.0.0.0", port=8050)
+    app.run(debug=args.debug, host=args.host, port=args.port)
