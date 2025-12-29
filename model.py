@@ -88,37 +88,47 @@ class DINO(nn.Module):
                 {"model": self.dino.cpu()}, os.path.join(model_cache_path, "dinov2.pth")
             )
 
-        self.attention_pooling = attention_pooling
-        self.attn_cache = None 
-        self._register_last_block_hook()
+        self.attention_pooling = attention_pooling 
         # self.projection_layer = ProjectionLayer()
 
-    def _register_last_block_hook(self): 
-        def hook_fn(module, input, output): 
-            # output is (B, H, N, N) AFTER softmax 
-            self.attn_cache = output 
-        # timm stores attention probabilities in attn_drop 
-        last_attn = self.dino.blocks[-1].attn.attn_drop 
-        last_attn.register_forward_hook(hook_fn)
-
-    def attention_pooling_fn(self, image): 
-        with torch.no_grad(): 
-            # Forward pass: this fills self.attn_cache 
-            tokens = self.dino.forward_features(image) # (B, 1+N, D) 
-            attn = self.attn_cache # (B, H, N, N) 
-            # CLS-to-patch attention (CLS is index 0) 
-            cls_attn = attn[:, :, 0, 1:] # (B, H, N) 
-            # Average heads 
-            weights = cls_attn.mean(dim=1) # (B, N) 
-            weights = weights / weights.sum(dim=1, keepdim=True) 
-            # Patch embeddings 
-            patch_tokens = tokens[:, 1:, :] # (B, N, D) 
-            # # Weighted sum 
-            pooled = torch.einsum("bn, bnd -> bd", weights, patch_tokens) 
-            # Normalize 
-            pooled = pooled / pooled.norm(dim=-1, keepdim=True) 
-            return pooled
-
+    def attention_pooling_fn(self, images):
+        """
+        Pool patch tokens using CLS attention weights from last layer
+        """ 
+        # Forward pass through patch embedding and blocks
+        x = self.dino.patch_embed(images)
+        x = self.dino._pos_embed(x)
+        x = self.dino.norm_pre(x)
+        
+        # Pass through all blocks except we need attention from last one
+        for i, block in enumerate(self.dino.blocks):
+            if i < len(self.dino.blocks) - 1:
+                x = block(x)
+            else:
+                # Last block - extract attention weights
+                B, N, C = x.shape
+                qkv = block.attn.qkv(block.norm1(x))
+                qkv = qkv.reshape(B, N, 3, block.attn.num_heads, C // block.attn.num_heads)
+                qkv = qkv.permute(2, 0, 3, 1, 4)
+                q, k, v = qkv.unbind(0)
+                
+                attn = (q @ k.transpose(-2, -1)) * block.attn.scale
+                attn = attn.softmax(dim=-1)
+                
+                # Get CLS token attention to patches (average across heads)
+                cls_attn = attn[:, :, 0, 1:].mean(dim=1)  # (B, num_patches)
+                
+                # Complete the block
+                x = block(x)
+        
+        x = self.dino.norm(x)
+        
+        # Attention pooling: weight patch tokens by CLS attention
+        patch_tokens = x[:, 1:]  # (B, num_patches, dim)
+        pooled = (patch_tokens * cls_attn.unsqueeze(-1)).sum(dim=1)  # (B, dim)
+            
+        return pooled
+    
     def forward(self, image, labels=None, text_embeddings=None):
         # Forward pass through DINO model
         if self.attention_pooling:
