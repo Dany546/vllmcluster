@@ -75,7 +75,7 @@ class CLIP(nn.Module):
 
 
 class DINO(nn.Module):
-    def __init__(self):
+    def __init__(self, attention_pooling=False):
         super().__init__()
         # Load DINO ViT model
         if os.path.exists(os.path.join(model_cache_path, "dinov2.pth")):
@@ -88,28 +88,44 @@ class DINO(nn.Module):
                 {"model": self.dino.cpu()}, os.path.join(model_cache_path, "dinov2.pth")
             )
 
-        self.register_hook()
-        self.projection_layer = ProjectionLayer()
+        self.attention_pooling = attention_pooling
+        self.attn_cache = None 
+        self._register_last_block_hook()
+        # self.projection_layer = ProjectionLayer()
 
-    def register_hook(self):
-        self.attention_weights = None
+    def _register_last_block_hook(self): 
+        def hook_fn(module, input, output): 
+            # output is (B, H, N, N) AFTER softmax 
+            self.attn_cache = output 
+        # timm stores attention probabilities in attn_drop 
+        last_attn = self.dino.blocks[-1].attn.attn_drop 
+        last_attn.register_forward_hook(hook_fn)
 
-        @torch.no_grad()
-        def hook_fn(module, input, output):
-            # output[1] is the attention weights from MultiheadAttention
-            self.attention_weights = output[1]
-
-        # Register hook on the last transformer block
-        self.dino.blocks[-1].attn.register_forward_hook(hook_fn)
-
-    def get_visual_embeddings(self, feature, attention_weights):
-        return None
+    def attention_pooling_fn(self, image): 
+        with torch.no_grad(): 
+            # Forward pass: this fills self.attn_cache 
+            tokens = self.dino.forward_features(image) # (B, 1+N, D) 
+            attn = self.attn_cache # (B, H, N, N) 
+            # CLS-to-patch attention (CLS is index 0) 
+            cls_attn = attn[:, :, 0, 1:] # (B, H, N) 
+            # Average heads 
+            weights = cls_attn.mean(dim=1) # (B, N) 
+            weights = weights / weights.sum(dim=1, keepdim=True) 
+            # Patch embeddings 
+            patch_tokens = tokens[:, 1:, :] # (B, N, D) 
+            # # Weighted sum 
+            pooled = torch.einsum("bn, bnd -> bd", weights, patch_tokens) 
+            # Normalize 
+            pooled = pooled / pooled.norm(dim=-1, keepdim=True) 
+            return pooled
 
     def forward(self, image, labels=None, text_embeddings=None):
         # Forward pass through DINO model
-        with torch.no_grad():
-            dino_features = self.dino.forward_features(image)
-            return dino_features[:, 0]  # , [[0, 0, 0]]
+        if self.attention_pooling:
+            return self.attention_pooling_fn(image) 
+    
+        dino_features = self.dino.forward_features(image)
+        return dino_features[:, 0]  # , [[0, 0, 0]]
 
         dino_features = (dino_features.unsqueeze(1) * self.attention_weights).mean(
             dim=2

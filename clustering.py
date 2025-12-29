@@ -198,9 +198,11 @@ class Clustering_layer:
     def __init__(self, model_str, model_name, debug=False):
         self.model_str = model_str
         self.model_name = model_name
-
+        
+        attention_pooling = "attention" in model_str
+        model_str = model_str.replace("_attention", "")
         if model_str == "dino":
-            self.model = DINO().to(device)
+            self.model = DINO(attention_pooling=attention_pooling).to(device)
         elif model_str == "clip":
             self.model = CLIP().to(device)
         elif "yolo" in model_str:

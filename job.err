@@ -28,143 +28,39 @@ Activating Modules:
   1) CUDA/12.5.0
 
 wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-wandb: setting up run cifbteid
 wandb: Tracking run with wandb version 0.23.1
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251226_215657-cifbteid
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251229_154349-8kp0q0tu
 wandb: Run `wandb offline` to turn off syncing.
-wandb: Syncing run visu; 
+wandb: Syncing run revived-energy-434
 wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
-wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/cifbteid
-root - INFO - Saving metrics for model yolo12s
-root - INFO - Computing projections for 36/36 parameters
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-root - INFO - Saving metrics for model yolov8x
-root - INFO - Computing projections for 36/36 parameters
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-root - INFO - Saving metrics for model dino
-root - INFO - Computing projections for 36/36 parameters
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-root - INFO - Saving metrics for model yolov8s
-root - INFO - Computing projections for 36/36 parameters
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-root - INFO - Saving metrics for model clip
-root - INFO - Computing projections for 36/36 parameters
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-root - INFO - Saving metrics for model yolo12x
-root - INFO - Computing projections for 36/36 parameters
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
-  warn(
-wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-wandb: setting up run d67dq1yv
-wandb: Tracking run with wandb version 0.23.1
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251226_230800-d67dq1yv
-wandb: Run `wandb offline` to turn off syncing.
-wandb: Syncing run knn
-wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
-wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/d67dq1yv
-wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-root - INFO - Computing 104 rows for table dino
-root - INFO - Computing 18 rows for table yolov8s
-root - INFO - Computing 108 rows for table clip
-root - INFO - Computing 18 rows for table yolo12x
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/8kp0q0tu
+[INFO] Computing embeddings from scratch...
+Traceback (most recent call last):
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 155, in <module>
+    main(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 115, in main
+    cluster(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 78, in cluster
+    clustering_layer.distance_matrix_db(dataloader)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/amp/autocast_mode.py", line 44, in decorate_autocast
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/clustering.py", line 319, in distance_matrix_db
+    emb = self.model(images)
+          ^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/model.py", line 125, in forward
+    return self.attention_pooling_fn(image)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/model.py", line 110, in attention_pooling_fn
+    cls_attn = attn[:, :, 0, 1:] # (B, H, N)
+              ~~~~^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
