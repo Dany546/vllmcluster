@@ -30,7 +30,7 @@ cd ~/MIRO/vllmcluster
 # cd ~/MIRO/vllmcluster
 
 source dino/bin/activate
-python main.py --model="dino_attention" 
+python main.py --model="dinov3_attention" 
 # source visu/bin/activate
 # pip install ipywidgets IPython --quiet
 # python main.py --visu

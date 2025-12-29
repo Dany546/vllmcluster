@@ -55,7 +55,7 @@ def cluster(args):
     for model in models:
         dataset = COCODataset(
             data_split="validation",
-            transform=augmentations["yolo" if "yolo" in model else model.split("_attention")[0]],
+            transform=augmentations["yolo" if "yolo" in model else model.replace("_attention", "").replace("v3", "")],
             caching=False,
             get_features=False,
         )

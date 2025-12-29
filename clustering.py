@@ -200,7 +200,8 @@ class Clustering_layer:
         self.model_name = model_name
         
         attention_pooling = "attention" in model_str
-        model_str = model_str.replace("_attention", "")
+        v3 = "v3" in model_str
+        model_str = model_str.replace("_attention", "").replace("v3", "")
         if model_str == "dino":
             self.model = DINO(attention_pooling=attention_pooling).to(device)
         elif model_str == "clip":
