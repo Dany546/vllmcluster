@@ -8,27 +8,6 @@ from PIL import PngImagePlugin
 from torchvision import transforms
 
 
-class PadToSquare:
-    def __init__(self, size=640, fill=0):
-        self.size = size
-        self.fill = fill
-
-    def __call__(self, img):
-        w, h = img.size
-        # scale max dim first
-        b = max(w, h)
-        scale = self.size / b
-        new_w, new_h = int(w * scale), int(h * scale)
-        img = F.resize(img, (new_h, new_w))
-
-        # compute padding
-        pad_left = (self.size - new_w) // 2
-        pad_top = (self.size - new_h) // 2
-        pad_right = self.size - new_w - pad_left
-        pad_bottom = self.size - new_h - pad_top
-
-        img = F.pad(img, (pad_left, pad_top, pad_right, pad_bottom), fill=self.fill)
-        return img
 
 
 PngImagePlugin.MAX_TEXT_CHUNK = 2 * 1024 * 1024  # must be increased to avoid errors
@@ -40,71 +19,76 @@ model_ckpt_path = model_cache_path + "dino2clip_COCO/"
 if not os.path.exists(model_ckpt_path):
     os.makedirs(model_ckpt_path)
 
-augmentations = transforms.Compose(
-    [
-        transforms.Resize((518, 518)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
-        transforms.RandomAffine(
-            degrees=20,  # rotation ±15°
-            translate=(0.1, 0.1),  # up to ±10% shift horizontally & vertically
-            scale=(0.9, 1.1),  # zoom in/out by ±10%
-            shear=(-10, 10),  # shear by ±10°
-            interpolation=transforms.InterpolationMode.BILINEAR,
-            fill=0,  # background fill color (0=black)
-        ),
-        transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+# augmentations = transforms.Compose(
+#     [
+#         transforms.Resize((518, 518)),
+#         transforms.RandomHorizontalFlip(),
+#         transforms.RandomVerticalFlip(),
+#         transforms.RandomAffine(
+#             degrees=20,  # rotation ±15°
+#             translate=(0.1, 0.1),  # up to ±10% shift horizontally & vertically
+#             scale=(0.9, 1.1),  # zoom in/out by ±10%
+#             shear=(-10, 10),  # shear by ±10°
+#             interpolation=transforms.InterpolationMode.BILINEAR,
+#             fill=0,  # background fill color (0=black)
+#         ),
+#         transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+#         transforms.RandomGrayscale(p=0.2),
+#         transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+#         transforms.ToTensor(),
+#         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+#     ]
+# )
+# augmentations_yolo = transforms.Compose(
+#     [
+#         transforms.Resize((640, 640)),
+#         transforms.RandomHorizontalFlip(),
+#         transforms.RandomVerticalFlip(),
+#         transforms.RandomAffine(
+#             degrees=20,  # rotation ±15°
+#             translate=(0.1, 0.1),  # up to ±10% shift horizontally & vertically
+#             scale=(0.9, 1.1),  # zoom in/out by ±10%
+#             shear=(-10, 10),  # shear by ±10°
+#             interpolation=transforms.InterpolationMode.BILINEAR,
+#             fill=0,  # background fill color (0=black)
+#         ),
+#         transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+#         transforms.RandomGrayscale(p=0.2),
+#         transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+#         transforms.ToTensor(),
+#     ]
+# )
+
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+
+def make_albumentations_pipeline(size, normalize=False):
+    transforms = [
+        A.LongestMaxSize(max_size=size), 
+        A.PadIfNeeded(min_height=size, min_width=size, 
+                      position="center", border_mode=0, 
+                      fill=114, fill_mask=0), 
     ]
-)
-augmentations_yolo = transforms.Compose(
-    [
-        transforms.Resize((640, 640)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
-        transforms.RandomAffine(
-            degrees=20,  # rotation ±15°
-            translate=(0.1, 0.1),  # up to ±10% shift horizontally & vertically
-            scale=(0.9, 1.1),  # zoom in/out by ±10%
-            shear=(-10, 10),  # shear by ±10°
-            interpolation=transforms.InterpolationMode.BILINEAR,
-            fill=0,  # background fill color (0=black)
-        ),
-        transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
-        transforms.ToTensor(),
-    ]
-)
-augmentations_yolo_eval = transforms.Compose(
-    [
-        PadToSquare(size=640, fill=114),  # 114 is YOLO’s default gray padding
-        transforms.ToTensor(),
-    ]
-)
-augmentations_dino_eval = transforms.Compose(
-    [
-        PadToSquare(size=518, fill=114),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
-augmentations_clip_eval = transforms.Compose(
-    [
-        PadToSquare(size=224, fill=114),
-        transforms.ToTensor(),
-    ]
-)
-augmentations_identity = transforms.Compose([lambda x: x])
+    # optional photometric augmentations (add as needed)
+    # transforms += [A.HorizontalFlip(p=0.5), A.RandomBrightnessContrast(p=0.2)]
+
+    if normalize:
+        transforms += [A.Normalize(mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))]
+    # convert to tensor CHW
+    transforms += [ToTensorV2()]
+
+    return A.Compose(
+        transforms,
+        bbox_params=A.BboxParams(format="coco", label_fields=["category_ids"], min_area=1, min_visibility=0.0),
+        additional_targets={"masks": "masks"}  # masks passed as list of HxW arrays
+    )
 
 augmentations = {
-    "yolo": augmentations_yolo_eval,
-    "dino": augmentations_dino_eval,
-    "clip": augmentations_clip_eval,
+    "yolo": make_albumentations_pipeline(640, normalize=False),
+    "dino": make_albumentations_pipeline(518, normalize=True),
+    "clip": make_albumentations_pipeline(224, normalize=False),
 }
+
 
 # YOLO index -> COCO supercategory
 supercat_names = [

@@ -14,6 +14,101 @@ from torchvision import transforms
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPTokenizer
 from pycocotools import mask as mask_utils  
+ 
+import albumentations as A
+import torchvision.transforms as T
+
+def _infer_pad_size_from_transform(transform, fallback=None):
+    """
+    Try to infer the final square pad size D from the provided transform.
+    Supports:
+      - Albumentations Compose with PadIfNeeded(min_height/min_width) or LongestMaxSize + PadIfNeeded
+      - Custom PadToSquare transform with attribute `size`
+      - torchvision-like transform where a PadToSquare instance is present
+    Returns int or fallback (if provided) or raises ValueError.
+    """
+    # 1) Albumentations Compose
+    try:
+        # Albumentations Compose has attribute 'transforms' (list)
+        if isinstance(transform, A.core.composition.Compose):
+            # search for PadIfNeeded first
+            for t in transform.transforms:
+                # PadIfNeeded has class name 'PadIfNeeded'
+                if getattr(t, "__class__", None).__name__ == "PadIfNeeded":
+                    # PadIfNeeded stores min_height/min_width
+                    mh = getattr(t, "min_height", None)
+                    mw = getattr(t, "min_width", None)
+                    if mh is not None and mw is not None and mh == mw:
+                        return int(mh)
+                    # if only one is set or they differ, prefer max
+                    if mh is not None and mw is not None:
+                        return int(max(mh, mw))
+                # LongestMaxSize sets max_size; if followed by PadIfNeeded, we can use that PadIfNeeded
+                if getattr(t, "__class__", None).__name__ == "LongestMaxSize":
+                    max_size = getattr(t, "max_size", None)
+                    # if max_size exists and there is a PadIfNeeded later, prefer PadIfNeeded; otherwise use max_size
+                    # look ahead for PadIfNeeded
+                    # (we already loop transforms in order; check subsequent transforms)
+                    # find index
+                    # safe guard: transforms is a list-like
+                    try:
+                        idx = transform.transforms.index(t)
+                        for t2 in transform.transforms[idx + 1:]:
+                            if getattr(t2, "__class__", None).__name__ == "PadIfNeeded":
+                                mh = getattr(t2, "min_height", None)
+                                mw = getattr(t2, "min_width", None)
+                                if mh is not None and mw is not None and mh == mw:
+                                    return int(mh)
+                                if mh is not None and mw is not None:
+                                    return int(max(mh, mw))
+                        # no PadIfNeeded found, use max_size
+                        if max_size is not None:
+                            return int(max_size)
+                    except Exception:
+                        if max_size is not None:
+                            return int(max_size)
+
+    except Exception:
+        # not albumentations or unexpected structure
+        pass
+
+    # 2) torchvision / custom PadToSquare
+    # If transform is a torchvision.transforms.Compose, search its transforms list
+    try:
+        # torchvision Compose stores transforms in .transforms
+        seq = getattr(transform, "transforms", None)
+        if seq is not None:
+            for t in seq:
+                # check for attribute 'size' (your PadToSquare has .size)
+                if hasattr(t, "size"):
+                    try:
+                        return int(getattr(t, "size"))
+                    except Exception:
+                        pass
+                # also check class name
+                if getattr(t, "__class__", None).__name__ == "PadToSquare":
+                    size = getattr(t, "size", None)
+                    if size is not None:
+                        return int(size)
+    except Exception:
+        pass
+
+    # 3) If transform itself has attribute 'size' (maybe user passed PadToSquare directly)
+    if hasattr(transform, "size"):
+        try:
+            return int(getattr(transform, "size"))
+        except Exception:
+            pass
+
+    # 4) fallback
+    if fallback is not None:
+        return int(fallback)
+
+    raise ValueError(
+        "Could not infer pad_size from transform. "
+        "Please pass pad_size explicitly or use an Albumentations Compose with PadIfNeeded/LongestMaxSize "
+        "or a PadToSquare transform with attribute 'size'."
+    )
 
 
 class COCODataset(torch.utils.data.Dataset):
@@ -63,126 +158,146 @@ class COCODataset(torch.utils.data.Dataset):
 
         # map id → filename
         self.id_to_file = {
-            img_id: img_dict["file_name"].split(".")[0]
+            img_id: img_dict["file_name"]
             for img_id, img_dict in self.images.items()
         }
 
-        self.ids = list(self.images.keys())
-        self.transform = transform
-        self.clip = self.clip_tokenizer = None
-        self.patch_size = 16
+        self.ids = list(self.images.keys()) 
+        self.transform = transform 
         self.seg = segmentation
+        self.caching = caching
+        self.pad_size = _infer_pad_size_from_transform(transform, fallback=640)
 
     def __len__(self):
         return len(self.ids)
 
+    def _ann_to_mask(self, ann, orig_w, orig_h):
+        seg = ann.get("segmentation", None)
+        if seg is None:
+            return np.zeros((orig_h, orig_w), dtype=np.uint8)
+        if isinstance(seg, list):
+            # polygon(s)
+            mask_img = Image.new("L", (orig_w, orig_h), 0)
+            draw = ImageDraw.Draw(mask_img)
+            for poly in seg:
+                xy = [(poly[i], poly[i+1]) for i in range(0, len(poly), 2)]
+                draw.polygon(xy, outline=1, fill=1)
+            return np.array(mask_img, dtype=np.uint8)
+        # RLE
+        rle = mask_utils.frPyObjects(seg, orig_h, orig_w)
+        m = mask_utils.decode(rle)
+        if m.ndim == 3:
+            m = np.any(m, axis=2).astype(np.uint8)
+        return m.astype(np.uint8)
+
     @torch.no_grad()
     def __getitem__(self, idx):
-        image = None
-
-        image_id = self.ids[idx]
-        img_info = self.images[image_id]
-        img_path = os.path.join(self.data_path, f"{self.id_to_file[image_id]}.jpg")
-        image = Image.open(img_path).convert("RGB")
-        image = self.transform(image)
-
-        if image.shape[0] == 1:
-            image = image.repeat(3, 1, 1)
+        image_id = self.ids[idx] 
+        img_path = os.path.join(self.data_path, self.id_to_file[image_id])
+        orig_image = Image.open(img_path).convert("RGB")  
+        orig_w, orig_h = orig_image.size
 
         anns = self.img_to_anns.get(image_id, [])
-        w, h = img_info["width"], img_info["height"]
 
-        orig_w, orig_h = w, h
-        out_h, out_w = image.shape[1], image.shape[2]
-
-        labels = {"cls": [], "bboxes": []}
-        if self.seg: 
-            labels["masks"] = [] 
-
+        # build COCO-format bboxes and category_ids
+        bboxes = []
+        category_ids = []
+        masks = []
         for ann in anns:
-            cat_id = ann["category_id"]
-            bbox = ann["bbox"]  # [x_min, y_min, width, height]
+            x, y, w, h = ann["bbox"]
+            # skip degenerate boxes
+            if w <= 0 or h <= 0:
+                continue
+            bboxes.append([x, y, w, h])
+            category_ids.append(self.id_to_yolo[ann["category_id"]])
+            if self.seg:
+                masks.append(self._ann_to_mask(ann, orig_w, orig_h))
 
-            # normalize to YOLO format
-            x_min, y_min, bw, bh = bbox
-            x_center = (x_min + bw / 2) / w
-            y_center = (y_min + bh / 2) / h
-            bw /= w
-            bh /= h
+        # Albumentations expects numpy HWC
+        image_np = np.array(orig_image)
 
-            yolo_class = self.id_to_yolo[cat_id]
-            labels["cls"].append([yolo_class])
-            labels["bboxes"].append([x_center, y_center, bw, bh])
+        # If there are no boxes, pass empty lists (albumentations handles them)
+        if self.seg:
+            transformed = self.transform(image=image_np, bboxes=bboxes, masks=masks, category_ids=category_ids)
+        else:
+            transformed = self.transform(image=image_np, bboxes=bboxes, category_ids=category_ids)
 
-            if self.seg: 
-                seg = ann.get("segmentation", None)
-                if seg is None:
-                    # empty mask
-                    mask_arr = np.zeros((orig_h, orig_w), dtype=np.uint8)
-                else:
-                    # polygon format (list of lists) or RLE
-                    if isinstance(seg, list):
-                        # rasterize polygons using PIL
-                        mask_img = Image.new("L", (orig_w, orig_h), 0)
-                        draw = ImageDraw.Draw(mask_img)
-                        for poly in seg:
-                            # poly is [x1,y1,x2,y2,...]
-                            xy = [(poly[i], poly[i + 1]) for i in range(0, len(poly), 2)]
-                            draw.polygon(xy, outline=1, fill=1)
-                        mask_arr = np.array(mask_img, dtype=np.uint8)
-                    else:
-                        # RLE (pycocotools)
-                        rle = mask_utils.frPyObjects(seg, orig_h, orig_w)
-                        mask_arr = mask_utils.decode(rle)
-                        # decode may return (H,W) or (H,W,1); ensure 2D
-                        if mask_arr.ndim == 3:
-                            mask_arr = np.any(mask_arr, axis=2).astype(np.uint8)
-                # convert to PIL to resize to transformed image size (nearest)
-                mask_pil = Image.fromarray(mask_arr * 255).convert("L")
-                if (out_w, out_h) != (orig_w, orig_h):
-                    mask_pil = mask_pil.resize((out_w, out_h), resample=Image.NEAREST)
-                mask_resized = np.array(mask_pil, dtype=np.uint8)
-                # convert to 0/1
-                mask_resized = (mask_resized > 127).astype(np.uint8)
-                labels["masks"].append(torch.from_numpy(mask_resized))  # uint8 tensor HxW
+        # image comes as tensor CHW from ToTensorV2
+        image_t = transformed["image"]  # torch.Tensor CxHxW
 
+        transformed_bboxes = transformed.get("bboxes", [])
+        transformed_labels = transformed.get("category_ids", [])
 
-        # convert to tensor
-        labels["cls"] = torch.tensor(labels["cls"], dtype=torch.long) 
-        labels["bboxes"] = torch.tensor(labels["bboxes"], dtype=torch.float)
+        # convert bboxes (COCO pixel) -> YOLO normalized relative to pad_size
+        D = self.pad_size
+        yolo_bboxes = []
+        for (x, y, w, h) in transformed_bboxes:
+            x_center = (x + w / 2.0) / D
+            y_center = (y + h / 2.0) / D
+            bw = w / D
+            bh = h / D
+            yolo_bboxes.append([x_center, y_center, bw, bh])
+
+        # tensors for cls and bboxes
+        if len(yolo_bboxes):
+            labels_cls = torch.tensor([[int(c)] for c in transformed_labels], dtype=torch.long)
+            labels_bboxes = torch.tensor(yolo_bboxes, dtype=torch.float32)
+        else:
+            labels_cls = torch.empty((0,1), dtype=torch.long)
+            labels_bboxes = torch.empty((0,4), dtype=torch.float32)
+
+        labels = {"cls": labels_cls, "bboxes": labels_bboxes}
 
         if self.seg:
-            if len(labels["masks"]):
-                # stack into (N, H, W) uint8 tensor
-                labels["masks"] = torch.stack(labels["masks"]).to(dtype=torch.uint8)
+            masks = transformed.get("masks", [])
+            if len(masks):
+                masks_t = torch.stack([m.to(torch.uint8) for m in masks], dim=0)
             else:
-                # no instances: empty tensor with correct spatial dims
-                labels["masks"] = torch.empty((0, out_h, out_w), dtype=torch.uint8)
+                masks_t = torch.empty((0, D, D), dtype=torch.uint8)
+            labels["masks"] = masks_t
 
-            if self.get_features:
-                if self.caption_sampling == "first":
-                    features = [
-                        torch.load(f"{self.cache_path}/coco/captions/{id}_0.pt").detach()
-                    ]
-                elif self.caption_sampling == "random":
-                    caption = np.random.choice(list(range(5)))
-                    features = [
-                        torch.load(
-                            f"{self.cache_path}/coco/captions/{id}_{caption}.pt"
-                        ).detach()
-                    ]
-                elif self.caption_sampling == "mean":
-                    features = []
-                    for caption in range(5):
-                        features += [
-                            torch.load(
-                                f"{self.cache_path}/coco/captions/{id}_{caption}.pt"
-                            ).detach()
-                        ]
+        if self.get_features:
+            # example: load first caption feature if exists
+            # keep same naming convention you used earlier
+            feat_path = os.path.join(self.cache_path, "coco", "captions", f"{image_id}_0.pt")
+            if os.path.exists(feat_path):
+                feature = torch.load(feat_path).detach()
+                return int(image_id), image_t, [feature]
+            return int(image_id), image_t, []
 
-                return id, image, features
 
-        return int(image_id), image, labels 
+        return int(image_id), image_t, labels
+
+    def coco_collate_fn(self, batch):
+        ids = [item[0] for item in batch]
+        images = torch.stack([item[1] for item in batch], dim=0)
+
+        cls_list = []
+        bbox_list = []
+        batch_idx_list = []
+        masks_list = []
+
+        for batch_id, item in enumerate(batch):
+            lab = item[2]
+            n = lab["cls"].shape[0] if lab["cls"].numel() else 0
+            if n > 0:
+                cls_list.append(lab["cls"])
+                bbox_list.append(lab["bboxes"])
+                batch_idx_list.append(torch.full((n,), batch_id, dtype=torch.long))
+            if "masks" in lab:
+                masks_list.append(lab["masks"])  # (n_i, H, W) or (0, H, W)
+
+        labels = {}
+        labels["cls"] = torch.cat(cls_list, dim=0) if cls_list else torch.empty((0,1), dtype=torch.long)
+        labels["bboxes"] = torch.cat(bbox_list, dim=0) if bbox_list else torch.empty((0,4), dtype=torch.float32)
+        labels["batch_idx"] = torch.cat(batch_idx_list, dim=0) if batch_idx_list else torch.empty((0,), dtype=torch.long)
+
+        if masks_list:
+            labels["masks"] = torch.cat(masks_list, dim=0)
+        else:
+            labels["masks"] = torch.empty((0, images.shape[2], images.shape[3]), dtype=torch.uint8)
+
+        return ids, images, labels
 
     
     def collate_fn(self, batch):
@@ -191,38 +306,9 @@ class COCODataset(torch.utils.data.Dataset):
             ids = [item[0] for item in batch]
             features = [item[2] for item in batch]
             return ids, images, features
-        else:
-            ids = [item[0] for item in batch]
-            images = torch.stack([item[1] for item in batch], dim=0)
+        else: 
 
-            labels = {"cls": [], "bboxes": [], "batch_idx": []}
-            if "masks" in batch[0][2]:
-                labels["masks"] = []      
-
-            for batch_id, item in enumerate(batch):
-                lab = item[2]
-                n = len(lab["cls"])
-
-                labels["cls"].append(lab["cls"])
-                labels["bboxes"].append(lab["bboxes"])
-                labels["batch_idx"].append(torch.full((n,), batch_id))
-
-                if "masks" in lab:
-                    labels["masks"].append(lab["masks"])
-
-            labels["cls"] = torch.cat(labels["cls"])
-            labels["bboxes"] = torch.cat(labels["bboxes"])
-            labels["batch_idx"] = torch.cat(labels["batch_idx"])
-            if labels["masks"]: 
-                # masks_list is list of (n_i, H, W); concatenate along instance dim -> (N_total, H, W) 
-                labels["masks"] = torch.cat(labels["masks"], dim=0) 
-            else: 
-                # no masks in batch 
-                _, H, W = images.shape[0], images.shape[2], images.shape[3] 
-                # not used; safer to infer from images 
-                labels["masks"] = torch.empty((0, images.shape[2], images.shape[3]), dtype=torch.uint8) 
-
-            return ids, images, labels 
+            return self.coco_collate_fn(batch)
 
 
 if __name__ == "__main__":
