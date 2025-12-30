@@ -37,6 +37,30 @@ def box_iou(box1, box2):
     return iou
 
 
+def compute_dice_score(pred_masks, gt_masks):
+    """
+    Compute Dice score between predicted and ground truth masks.
+    
+    Args:
+        pred_masks: Predicted masks [N, H, W]
+        gt_masks: Ground truth masks [N, H, W]
+    
+    Returns:
+        Dice score (scalar)
+    """
+    if pred_masks.numel() == 0 or gt_masks.numel() == 0:
+        return torch.tensor(0.0)
+    
+    pred_masks = (pred_masks > 0.5).float()
+    gt_masks = (gt_masks > 0.5).float()
+    
+    intersection = (pred_masks * gt_masks).sum(dim=(1, 2))
+    union = pred_masks.sum(dim=(1, 2)) + gt_masks.sum(dim=(1, 2))
+    
+    dice = (2.0 * intersection) / (union + 1e-6)
+    return dice.mean()
+
+
 class yolowrapper(torch.nn.Module):
     def __init__(self, model_str):
         super().__init__()
@@ -44,6 +68,9 @@ class yolowrapper(torch.nn.Module):
         self.model.eval()
         self.model.to(device)
         self.model.device = device
+        
+        # Check if this is a segmentation model
+        self.is_seg = 'seg' in model_str.lower()
 
         def hook_fn(module, input, output):
             module.features = (
@@ -58,13 +85,85 @@ class yolowrapper(torch.nn.Module):
             m.features = None
             m.register_forward_hook(hook_fn)
 
+    def compute_losses(self, images, targets):
+        """
+        Compute per-image losses using the model's training mode.
+        
+        Returns:
+            per_image_losses: List of dicts with loss components per image
+        """
+        # Temporarily switch to training mode to compute losses
+        was_training = self.model.training
+        self.model.train()
+        
+        try:
+            # Forward pass with loss computation
+            with torch.enable_grad():
+                # Create a copy to avoid issues
+                img_copy = images.clone().requires_grad_(False)
+                loss_dict = self.model(img_copy, targets)
+            
+            # Extract per-image losses from the model's loss output
+            # Ultralytics returns (loss, loss_items) where loss_items is a tensor
+            if isinstance(loss_dict, tuple):
+                loss, loss_items = loss_dict
+                # loss_items typically contains [box_loss, cls_loss, dfl_loss] or 
+                # [box_loss, seg_loss, cls_loss, dfl_loss] for segmentation
+            else:
+                # If it returns dict or single value, handle accordingly
+                loss = loss_dict
+                loss_items = None
+            
+            # Get detailed loss breakdown from model's internal loss storage
+            # The model stores per-batch losses, we need per-image
+            batch_size = images.shape[0]
+            
+            if self.is_seg:
+                # Segmentation model: box_loss, seg_loss, cls_loss, dfl_loss
+                if loss_items is not None:
+                    box_loss = loss_items[0].item() / batch_size
+                    seg_loss = loss_items[1].item() / batch_size if len(loss_items) > 1 else 0.0
+                    cls_loss = loss_items[2].item() / batch_size if len(loss_items) > 2 else 0.0
+                    dfl_loss = loss_items[3].item() / batch_size if len(loss_items) > 3 else 0.0
+                else:
+                    box_loss = seg_loss = cls_loss = dfl_loss = 0.0
+                
+                per_image_losses = [{
+                    'box_loss': box_loss,
+                    'seg_loss': seg_loss,
+                    'cls_loss': cls_loss,
+                    'dfl_loss': dfl_loss
+                } for _ in range(batch_size)]
+            else:
+                # Detection model: box_loss, cls_loss, dfl_loss
+                if loss_items is not None:
+                    box_loss = loss_items[0].item() / batch_size
+                    cls_loss = loss_items[1].item() / batch_size if len(loss_items) > 1 else 0.0
+                    dfl_loss = loss_items[2].item() / batch_size if len(loss_items) > 2 else 0.0
+                else:
+                    box_loss = cls_loss = dfl_loss = 0.0
+                
+                per_image_losses = [{
+                    'box_loss': box_loss,
+                    'cls_loss': cls_loss,
+                    'dfl_loss': dfl_loss
+                } for _ in range(batch_size)]
+            
+        finally:
+            # Restore original training state
+            if not was_training:
+                self.model.eval()
+        
+        return per_image_losses
+
     def match_targets_to_preds(
         self, final_preds, batch_idx, targets, N, iou_thres=0.6, conf_thres=0.5
     ):
         """
         final_preds: list of tensors per image, each [N,6] (x1,y1,x2,y2,conf,cls)
+                     or [N,6+mask_dim] for segmentation
         batch_idx: indexes of predicted boxes in the batch
-        targets: dict with GT boxes and labels
+        targets: dict with GT boxes and labels (and masks for segmentation)
         returns: filtered targets aligned with final_preds
         """
         matched = []
@@ -77,6 +176,18 @@ class yolowrapper(torch.nn.Module):
             pred_box = preds[:, :4]
             cls = preds[:, 5]
             conf = preds[:, 4:5]
+            
+            # Handle masks for segmentation models
+            dice_score = 0.0
+            if self.is_seg and preds.shape[1] > 6:
+                # Extract mask data if available
+                pred_masks = preds[:, 6:]  # Remaining columns are mask data
+                if 'masks' in targets and mask.sum() > 0:
+                    gt_masks = targets['masks'][mask]
+                    if len(pred_masks) > 0 and len(gt_masks) > 0:
+                        # Compute Dice score
+                        dice_score = compute_dice_score(pred_masks, gt_masks).item()
+            
             if mask.sum() == 0:
                 if len(preds) == 0:
                     miou = 1
@@ -86,7 +197,7 @@ class yolowrapper(torch.nn.Module):
                     miou = 0
                     cat = -2
                     hitfreq = 0
-                matched.append([miou, 1, cat, cat, hitfreq])
+                matched.append([miou, 1, cat, cat, hitfreq, dice_score])
                 all.append(
                     [
                         img_idx,
@@ -94,6 +205,7 @@ class yolowrapper(torch.nn.Module):
                         np.array([1], dtype=np.float32),
                         np.array([cat], dtype=np.float32),
                         np.array([cat], dtype=np.float32),
+                        np.array([dice_score], dtype=np.float32),
                     ]
                 )
                 continue
@@ -123,6 +235,7 @@ class yolowrapper(torch.nn.Module):
                             conf[cls == gt_labels[idx]][ious > iou_thres][best_idx],
                             np.ones(len(best_iou)) * gt_labels[idx],
                             np.ones(len(best_iou)) * cat_to_super[gt_labels[idx]],
+                            np.ones(len(best_iou)) * dice_score,
                         ]
             correct /= len(gt_boxes)
             cpu_labels = gt_labels.cpu().numpy()
@@ -140,11 +253,12 @@ class yolowrapper(torch.nn.Module):
                         most_frequent_cat,
                         most_frequent_supercat,
                         correct,
+                        dice_score,
                     ]
                 )
                 all.append(all_match)
             else:
-                matched.append([0, 1, most_frequent_cat, most_frequent_supercat, 0])
+                matched.append([0, 1, most_frequent_cat, most_frequent_supercat, 0, dice_score])
                 all.append(
                     [
                         img_idx,
@@ -152,6 +266,7 @@ class yolowrapper(torch.nn.Module):
                         np.array([1], dtype=np.float32),
                         np.array([most_frequent_cat], dtype=np.int64),
                         np.array([most_frequent_supercat], dtype=np.int64),
+                        np.array([dice_score], dtype=np.float32),
                     ]
                 )
         return matched, all
@@ -164,31 +279,51 @@ class yolowrapper(torch.nn.Module):
 
         Returns:
             embeddings: [B, embedding_dim]
-            losses (optional): List of per-image losses, where each is:
-                                [[box_loss, cls_loss, dfl_loss], ...] per bbox
+            outputs: Per-image metrics (including losses)
+            all: All predictions per image
         """
 
         self.model.eval()
-        # Forward pass: raw predictions + loss items
+        # Forward pass: raw predictions
         preds = self.model(images)
+        
+        # Compute losses if targets are provided
+        losses = None
+        if targets is not None:
+            losses = self.compute_losses(images, targets)
+        
         # Apply confidence threshold + NMS
         final_preds, keep_indices = non_max_suppression(
             preds,
             conf_thres=0.25,
             iou_thres=0.45,
             max_det=300,
-            return_idxs=True,  # you need to modify NMS to give you this
+            return_idxs=True,
         )
+        
         # Slice raw predictions to keep logits/objectness
         batch_idx = []
         for img_idx, img in enumerate(keep_indices):
             batch_idx.extend([img_idx] * len(img))  # batch index
         batch_idx = torch.tensor(batch_idx, device=images.device)
         final_preds = torch.cat([f for f in final_preds], dim=0)
+        
         # Replace targets/preds with filtered ones
         final_preds, all = self.match_targets_to_preds(
             final_preds, batch_idx, targets, len(images)
         )
+        
+        # Add losses to final_preds
+        if losses is not None:
+            for i, pred in enumerate(final_preds):
+                pred.extend([
+                    losses[i]['box_loss'],
+                    losses[i]['cls_loss'],
+                    losses[i]['dfl_loss'],
+                ])
+                if self.is_seg:
+                    pred.append(losses[i]['seg_loss'])
+        
         embeddings = torch.cat([m.features for m in self.detection_layer_entry], dim=1)
 
         return embeddings, final_preds, all
@@ -202,6 +337,10 @@ class Clustering_layer:
         attention_pooling = "attention" in model_str
         v3 = "v3" in model_str
         model_str = model_str.replace("_attention", "").replace("v3", "")
+        
+        # Check if segmentation model
+        self.is_seg = 'seg' in model_str.lower()
+        
         if model_str == "dino":
             self.model = DINO(attention_pooling=attention_pooling).to(device)
         elif model_str == "clip":
@@ -236,7 +375,7 @@ class Clustering_layer:
         data_loader,
         pragma_speed: bool = True,
     ) -> Tuple[str, str]:
-        """Compute pairwise distances and store them in SQLite without loading the full matrix. - Embeddings are inserted in batches (executemany). - Distances are computed block-by-block and written in bulk. - Progress table allows safe resume after interruption."""
+        """Compute pairwise distances and store them in SQLite without loading the full matrix."""
         batch_size = len(next(iter(data_loader))[0])
         embeddings_db = self.embeddings_db
         distances_db = self.distances_db
@@ -249,28 +388,81 @@ class Clustering_layer:
             emb_conn.execute("PRAGMA temp_store=MEMORY")
             emb_conn.execute("PRAGMA cache_size=-20000")
         emb_cursor = emb_conn.cursor()
-        emb_cursor.execute("""
-            CREATE TABLE IF NOT EXISTS embeddings (
-                id INTEGER PRIMARY KEY,
-                img_id INTEGER,
-                embedding BLOB,
-                hit_freq REAL,
-                mean_iou REAL,
-                mean_conf REAL,
-                flag_cat INTEGER,
-                flag_supercat INTEGER
-            )
-        """)
-        emb_cursor.execute("""
-            CREATE TABLE IF NOT EXISTS predictions (
-                id INTEGER PRIMARY KEY,
-                img_id INTEGER,
-                iou BLOB,
-                conf BLOB,
-                cat BLOB,
-                supercat BLOB
-            )
-        """)
+        
+        # Create table schema based on model type
+        if "yolo" in self.model_name:
+            if self.is_seg:
+                # Segmentation model schema
+                emb_cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS embeddings (
+                        id INTEGER PRIMARY KEY,
+                        img_id INTEGER,
+                        embedding BLOB,
+                        hit_freq REAL,
+                        mean_iou REAL,
+                        mean_conf REAL,
+                        mean_dice REAL,
+                        flag_cat INTEGER,
+                        flag_supercat INTEGER,
+                        box_loss REAL,
+                        cls_loss REAL,
+                        dfl_loss REAL,
+                        seg_loss REAL
+                    )
+                """)
+                emb_cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS predictions (
+                        id INTEGER PRIMARY KEY,
+                        img_id INTEGER,
+                        iou BLOB,
+                        conf BLOB,
+                        dice BLOB,
+                        cat BLOB,
+                        supercat BLOB
+                    )
+                """)
+            else:
+                # Detection model schema
+                emb_cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS embeddings (
+                        id INTEGER PRIMARY KEY,
+                        img_id INTEGER,
+                        embedding BLOB,
+                        hit_freq REAL,
+                        mean_iou REAL,
+                        mean_conf REAL,
+                        flag_cat INTEGER,
+                        flag_supercat INTEGER,
+                        box_loss REAL,
+                        cls_loss REAL,
+                        dfl_loss REAL
+                    )
+                """)
+                emb_cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS predictions (
+                        id INTEGER PRIMARY KEY,
+                        img_id INTEGER,
+                        iou BLOB,
+                        conf BLOB,
+                        cat BLOB,
+                        supercat BLOB
+                    )
+                """)
+        else:
+            # Non-YOLO models (DINO, CLIP)
+            emb_cursor.execute("""
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id INTEGER PRIMARY KEY,
+                    img_id INTEGER,
+                    embedding BLOB,
+                    hit_freq REAL,
+                    mean_iou REAL,
+                    mean_conf REAL,
+                    flag_cat INTEGER,
+                    flag_supercat INTEGER
+                )
+            """)
+        
         emb_cursor.execute(
             "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value INTEGER)"
         )
@@ -322,12 +514,55 @@ class Clustering_layer:
                 if "yolo" in self.model_name:
                     row = []
                     all_row = []
-                    for id, (img_id, vec, output) in enumerate(
-                        zip(img_ids, emb.cpu(), outputs)
-                    ):
-                        miou, mconf, cat, supercat, hit_freq = output
-                        row.append(
-                            [
+                    
+                    if self.is_seg:
+                        # Segmentation model: include Dice and seg_loss
+                        for id, (img_id, vec, output) in enumerate(
+                            zip(img_ids, emb.cpu(), outputs)
+                        ):
+                            miou, mconf, cat, supercat, hit_freq, dice, box_loss, cls_loss, dfl_loss, seg_loss = output
+                            row.append([
+                                int((batch_ids * batch_size) + id),
+                                int(img_id),
+                                vec.numpy().tobytes(),
+                                hit_freq,
+                                miou,
+                                mconf,
+                                dice,
+                                cat,
+                                supercat,
+                                box_loss,
+                                cls_loss,
+                                dfl_loss,
+                                seg_loss,
+                            ])
+                        emb_cursor.executemany(
+                            "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            row,
+                        )
+                        for id, (img_id, miou, mconf, cat, supercat, dice) in enumerate(
+                            all_output
+                        ):
+                            all_row.append([
+                                int(batch_ids * batch_size + id),
+                                int(img_id),
+                                miou.tobytes(),
+                                mconf.tobytes(),
+                                dice.tobytes(),
+                                cat.tobytes(),
+                                supercat.tobytes(),
+                            ])
+                        emb_cursor.executemany(
+                            "INSERT OR IGNORE INTO predictions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            all_row,
+                        )
+                    else:
+                        # Detection model: no Dice or seg_loss
+                        for id, (img_id, vec, output) in enumerate(
+                            zip(img_ids, emb.cpu(), outputs)
+                        ):
+                            miou, mconf, cat, supercat, hit_freq, dice, box_loss, cls_loss, dfl_loss = output
+                            row.append([
                                 int((batch_ids * batch_size) + id),
                                 int(img_id),
                                 vec.numpy().tobytes(),
@@ -336,29 +571,29 @@ class Clustering_layer:
                                 mconf,
                                 cat,
                                 supercat,
-                            ]
+                                box_loss,
+                                cls_loss,
+                                dfl_loss,
+                            ])
+                        emb_cursor.executemany(
+                            "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            row,
                         )
-                    emb_cursor.executemany(
-                        "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        row,
-                    )
-                    for id, (img_id, miou, mconf, cat, supercat) in enumerate(
-                        all_output
-                    ):
-                        all_row.append(
-                            [
+                        for id, (img_id, miou, mconf, cat, supercat, dice) in enumerate(
+                            all_output
+                        ):
+                            all_row.append([
                                 int(batch_ids * batch_size + id),
                                 int(img_id),
                                 miou.tobytes(),
                                 mconf.tobytes(),
                                 cat.tobytes(),
                                 supercat.tobytes(),
-                            ]
+                            ])
+                        emb_cursor.executemany(
+                            "INSERT OR IGNORE INTO predictions VALUES (?, ?, ?, ?, ?, ?)",
+                            all_row,
                         )
-                    emb_cursor.executemany(
-                        "INSERT OR IGNORE INTO predictions VALUES (?, ?, ?, ?, ?, ?)",
-                        all_row,
-                    )
                 else:
                     row = []
                     for id, (img_id, vec, label) in enumerate(
@@ -370,18 +605,16 @@ class Clustering_layer:
                         super_cat = [cat_to_super[cat] for cat in cpu_labels]
                         values, counts = np.unique(super_cat, return_counts=True)
                         most_frequent_supercat = values[np.argmax(counts)]
-                        row.append(
-                            [
-                                int((batch_ids * batch_size) + id),
-                                int(img_id),
-                                vec.numpy().tobytes(),
-                                0,
-                                0,
-                                0,
-                                most_frequent_cat,
-                                most_frequent_supercat,
-                            ]
-                        )
+                        row.append([
+                            int((batch_ids * batch_size) + id),
+                            int(img_id),
+                            vec.numpy().tobytes(),
+                            0,
+                            0,
+                            0,
+                            most_frequent_cat,
+                            most_frequent_supercat,
+                        ])
                     emb_cursor.executemany(
                         "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         row,
@@ -443,13 +676,11 @@ class Clustering_layer:
 
                 dist_block = torch.cdist(emb_i, emb_j, p=2).cpu().numpy()
 
-                rows = np.column_stack(
-                    [
-                        np.repeat([gid for gid in idx_i], len(idx_j)),
-                        np.tile([gid for gid in idx_j], len(idx_i)),
-                        dist_block.ravel(),
-                    ]
-                ).tolist()
+                rows = np.column_stack([
+                    np.repeat([gid for gid in idx_i], len(idx_j)),
+                    np.tile([gid for gid in idx_j], len(idx_i)),
+                    dist_block.ravel(),
+                ]).tolist()
 
                 dist_cursor.executemany(
                     "INSERT OR REPLACE INTO distances (i, j, distance) VALUES (?, ?, ?)",
