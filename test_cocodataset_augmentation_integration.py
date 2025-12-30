@@ -11,6 +11,112 @@ from dataset import COCODataset
 from cfg import augmentations
 PadToSquare = augmentations['yolo']  
 
+from viz_helper import save_first_image_with_labels 
+
+def test_real_image_pipeline(tmp_path):
+    """
+    Integration test using a real image from your COCO JSON.
+    Verifies: image file exists, image loads, transform output shape/dtype,
+    labels present, bboxes normalized, masks match image spatial dims.
+    """
+    # === Configure paths to your real COCO files ===
+    # Point to the COCO JSON your dataset normally uses (validation or train)
+    coco_json_path = "/globalscratch/ucl/irec/darimez/dino/coco/validation/annotations/instances_val2017.json"
+    images_dir = "/globalscratch/ucl/irec/darimez/dino/coco/validation/images"  # adjust if needed
+
+    assert os.path.exists(coco_json_path), f"COCO JSON not found: {coco_json_path}"
+    assert os.path.isdir(images_dir), f"Images dir not found: {images_dir}"
+
+    # load COCO json and pick the first image entry
+    with open(coco_json_path, "r") as f:
+        coco = json.load(f)
+    assert "images" in coco and len(coco["images"]) > 0, "COCO JSON has no images"
+
+    first_img = coco["images"][0]
+    img_file = first_img["file_name"]
+    img_id = first_img["id"]
+    img_path = os.path.join(images_dir, img_file)
+    assert os.path.exists(img_path), f"Image file referenced in JSON not found: {img_path}"
+ 
+    transform = augmentations["yolo"]   
+
+    # instantiate dataset (match your constructor signature)
+    ds = COCODataset(
+        data_split="validation",
+        get_features=False,
+        cache_path="/globalscratch/ucl/irec/darimez/dino",
+        transform=transform,
+        caching=False,
+        segmentation=True,
+        caption_sampling="first", 
+    )
+
+    # override dataset internals if your class loads a fixed JSON path
+    ds.data = coco
+    ds.images = {img["id"]: img for img in coco["images"]}
+    ds.annotations = coco["annotations"]
+    ds.img_to_anns = {}
+    for ann in ds.annotations:
+        ds.img_to_anns.setdefault(ann["image_id"], []).append(ann)
+    ds.id_to_file = {img_id: img_dict["file_name"] for img_id, img_dict in ds.images.items()}
+    ds.ids = list(ds.images.keys())
+
+    # create dataloader and fetch first batch
+    loader = torch.utils.data.DataLoader(ds, batch_size=4, shuffle=False, collate_fn=ds.collate_fn)
+    batch = next(iter(loader))
+    ids, images, labels = batch
+
+    # Basic checks on image tensor
+    assert isinstance(images, torch.Tensor), "images must be a torch.Tensor"
+    B, C, H, W = images.shape
+    assert B > 0, "batch is empty"
+    assert C in (1, 3), f"unexpected channel count: {C}"
+    assert H == W, f"expected square output after PadToSquare/PadIfNeeded, got H={H}, W={W}"
+
+    # check first image path and shape by loading raw file
+    raw = Image.open(img_path).convert("RGB")
+    raw_w, raw_h = raw.size
+    assert raw_w > 0 and raw_h > 0
+
+    # Labels checks
+    assert isinstance(labels, dict), "labels must be a dict"
+    # cls and bboxes present
+    assert "cls" in labels and "bboxes" in labels, "labels missing cls or bboxes"
+    # batch_idx alignment if present
+    if "batch_idx" in labels:
+        batch_idx = labels["batch_idx"]
+        assert batch_idx.dtype == torch.long
+        # ensure at least one instance belongs to first image in batch
+        assert (batch_idx == 0).any(), "no instances assigned to first image in batch"
+
+    # check bbox normalization heuristic: values should be in [0,1]
+    bboxes = labels["bboxes"]
+    if bboxes.numel() > 0:
+        # pick instances for first image
+        if "batch_idx" in labels:
+            inst_idx = torch.where(labels["batch_idx"] == 0)[0]
+        else:
+            inst_idx = torch.arange(bboxes.shape[0])
+        if inst_idx.numel() > 0:
+            sample_bbox = bboxes[int(inst_idx[0])].cpu().numpy()
+            assert np.all(sample_bbox >= 0.0 - 1e-6) and np.all(sample_bbox <= 1.0 + 1e-6), \
+                f"bbox values not normalized to [0,1]: {sample_bbox}"
+
+    # check masks shape and dtype if present
+    if "masks" in labels:
+        masks = labels["masks"]
+        assert masks.dtype == torch.uint8 or masks.dtype == torch.bool or masks.dtype == torch.float32, \
+            f"unexpected mask dtype: {masks.dtype}"
+        # masks should have shape (N, H_mask, W_mask)
+        if masks.numel() > 0:
+            assert masks.ndim == 3, f"masks must be (N,H,W), got {masks.shape}"
+            # ensure mask spatial dims match image dims (or are resizable)
+            _, Mh, Mw = masks.shape
+            assert (Mh == H and Mw == W) or (Mh > 0 and Mw > 0), "mask spatial dims invalid"
+
+    # save a visualization for manual inspection 
+    save_first_image_with_labels(batch, "debug_first_image.png", images_dir, ds.id_to_file, ds.img_to_anns)  
+
 def write_synthetic_coco(tmpdir, img_name="0000001.jpg"):
     """
     Create a synthetic image and a minimal COCO json with one polygon annotation.

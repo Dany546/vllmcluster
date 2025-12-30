@@ -131,7 +131,7 @@ def save_first_image_with_labels(
         ax0.imshow(orig_vis)
         ax0.axis("off")
         ax0.set_title("Original image")
-        if show_original_labels and original_annotations and orig_id in original_annotations:
+        if show_original_labels and original_annotations:
             for ann in original_annotations[orig_id]:
                 if "bbox" in ann:
                     # COCO bbox in pixels
@@ -182,4 +182,5 @@ def save_first_image_with_labels(
     plt.tight_layout()
     plt.savefig(save_path, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
+    print("Real image integration test passed. Visualization saved at:", save_path)
     return save_path
