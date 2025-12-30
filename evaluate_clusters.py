@@ -170,7 +170,8 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     targets = ["hit_freq", "mean_iou", "flag_supercat"]
-    k_targ = list(itertools.product(neighbor_grid, targets))
+    n_components = [2, 10, 50]
+    k_targ = list(itertools.product(neighbor_grid, targets, n_components))
     tasks = {}  # list of (table_name, k)
     lower_dim_names, lower_dim_tables = get_lower_dim_tables()
     table_names = [
@@ -190,8 +191,8 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
             table_pairs = [table_name]
 
         k_targ_per_table = itertools.product(k_targ, table_pairs)
-        for (k, target), table_pair in k_targ_per_table:
-            other_columns = {"target": target}
+        for (k, target, n_component), table_pair in k_targ_per_table:
+            other_columns = {"target": target, "n_components": n_component}
             if not already_computed(
                 table_pair, k, RN, num_folds, "kfold", distance_metric, other_columns, c
             ):
@@ -203,7 +204,8 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
                         num_folds,
                         "kfold",
                         distance_metric,
-                        target,
+                        n_component,
+                        target, # must always be last arg
                     )
                 )
     conn.close()

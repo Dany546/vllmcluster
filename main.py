@@ -38,8 +38,8 @@ def cluster(args):
         models = [
             "yolov8s-seg.pt",
             "yolov8x-seg.pt",
-            "yolo12s-seg.pt",
-            "yolo12x-seg.pt",
+            "yolo11s-seg.pt",
+            "yolo11x-seg.pt",
             "yolov8s.pt",
             "yolov8x.pt",
             "yolo12s.pt",

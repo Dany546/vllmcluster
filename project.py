@@ -217,10 +217,10 @@ def project(args):
     umap_params = {
         "n_neighbors": [15, 30, 60],
         "min_dist": [0.02, 0.1, 0.5],
-        "n_components": [2],
+        "n_components": [2, 10, 50],
     }
     tsne_params = {
-        "n_components": [2],
+        "n_components": [2, 10, 50],
         "perplexity": [10, 30, 50],
         "early_exaggeration": [8, 12, 16],
         "learning_rate": [100, 200, 500],
