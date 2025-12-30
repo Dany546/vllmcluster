@@ -10,6 +10,7 @@ from model import CLIP, DINO
 from typing_extensions import Optional, Tuple
 from ultralytics import YOLO
 from ultralytics.utils.nms import non_max_suppression
+from types import SimpleNamespace
 
 
 def box_iou(box1, box2):
@@ -64,10 +65,18 @@ def compute_dice_score(pred_masks, gt_masks):
 class yolowrapper(torch.nn.Module):
     def __init__(self, model_str):
         super().__init__()
-        self.model = YOLO(model_str).model
-        self.model.eval()
-        self.model.to(device)
+        self.model = YOLO(model_str).model 
+        args = self.model.args
+        args['overlap_mask'] = True
+        args['mosaic'] = 0
+        args['profile'] = False
+        for key in ['box', 'cls', 'dfl']:
+            args[key] = 1  
+        self.model.args =  SimpleNamespace(**args)  
+        self.model = self.model.to(device)
         self.model.device = device
+        self.model.criterion = self.model.init_criterion()
+        self.model.eval()
         
         # Check if this is a segmentation model
         self.is_seg = 'seg' in model_str.lower()
@@ -85,7 +94,7 @@ class yolowrapper(torch.nn.Module):
             m.features = None
             m.register_forward_hook(hook_fn)
 
-    def compute_losses(self, images, targets):
+    def compute_losses(self, images: torch.Tensor, targets: dict):
         """
         Compute per-image losses using the model's training mode.
         
@@ -95,18 +104,25 @@ class yolowrapper(torch.nn.Module):
         # Temporarily switch to training mode to compute losses
         was_training = self.model.training
         self.model.train()
+        for key, value in targets.items():
+            if isinstance(value, torch.Tensor):
+                value.to(device)
         
         try:
             # Forward pass with loss computation
-            with torch.enable_grad():
-                # Create a copy to avoid issues
-                img_copy = images.clone().requires_grad_(False)
-                loss_dict = self.model(img_copy, targets)
+            # Create a copy to avoid issues
+            img_copy = images.clone().requires_grad_(False)
+            batch = {'img': img_copy, **targets}
+            loss_dict = self.model(batch)
             
             # Extract per-image losses from the model's loss output
             # Ultralytics returns (loss, loss_items) where loss_items is a tensor
             if isinstance(loss_dict, tuple):
-                loss, loss_items = loss_dict
+                try:
+                    loss, loss_items = loss_dict
+                except Exception as err:
+                    print("Error extracting loss items:", len(loss_dict))
+                    raise err
                 # loss_items typically contains [box_loss, cls_loss, dfl_loss] or 
                 # [box_loss, seg_loss, cls_loss, dfl_loss] for segmentation
             else:

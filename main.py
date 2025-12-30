@@ -58,6 +58,7 @@ def cluster(args):
             transform=augmentations["yolo" if "yolo" in model else model.replace("_attention", "").replace("v3", "")],
             caching=False,
             get_features=False,
+            segmentation='seg' in model,
         )
         torch.manual_seed(42)
         dataloader = torch.utils.data.DataLoader(

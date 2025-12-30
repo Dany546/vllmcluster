@@ -9,10 +9,11 @@ import requests
 import torch
 from cfg import augmentations, device
 from datasets import load_dataset
-from PIL import Image
+from PIL import Image, ImageDraw
 from torchvision import transforms
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPTokenizer
+from pycocotools import mask as mask_utils  
 
 
 class COCODataset(torch.utils.data.Dataset):
@@ -23,6 +24,7 @@ class COCODataset(torch.utils.data.Dataset):
         cache_path="/globalscratch/ucl/irec/darimez/dino",
         transform=augmentations,
         caching=False,
+        segmentation=False,
         caption_sampling="first",
     ):
         super().__init__()
@@ -69,6 +71,7 @@ class COCODataset(torch.utils.data.Dataset):
         self.transform = transform
         self.clip = self.clip_tokenizer = None
         self.patch_size = 16
+        self.seg = segmentation
 
     def __len__(self):
         return len(self.ids)
@@ -89,7 +92,13 @@ class COCODataset(torch.utils.data.Dataset):
         anns = self.img_to_anns.get(image_id, [])
         w, h = img_info["width"], img_info["height"]
 
+        orig_w, orig_h = w, h
+        out_h, out_w = image.shape[1], image.shape[2]
+
         labels = {"cls": [], "bboxes": []}
+        if self.seg: 
+            labels["masks"] = [] 
+
         for ann in anns:
             cat_id = ann["category_id"]
             bbox = ann["bbox"]  # [x_min, y_min, width, height]
@@ -105,35 +114,77 @@ class COCODataset(torch.utils.data.Dataset):
             labels["cls"].append([yolo_class])
             labels["bboxes"].append([x_center, y_center, bw, bh])
 
-        # convert to tensor
-        for label in labels.keys():
-            labels[label] = torch.from_numpy(np.array(labels[label]))
+            if self.seg: 
+                seg = ann.get("segmentation", None)
+                if seg is None:
+                    # empty mask
+                    mask_arr = np.zeros((orig_h, orig_w), dtype=np.uint8)
+                else:
+                    # polygon format (list of lists) or RLE
+                    if isinstance(seg, list):
+                        # rasterize polygons using PIL
+                        mask_img = Image.new("L", (orig_w, orig_h), 0)
+                        draw = ImageDraw.Draw(mask_img)
+                        for poly in seg:
+                            # poly is [x1,y1,x2,y2,...]
+                            xy = [(poly[i], poly[i + 1]) for i in range(0, len(poly), 2)]
+                            draw.polygon(xy, outline=1, fill=1)
+                        mask_arr = np.array(mask_img, dtype=np.uint8)
+                    else:
+                        # RLE (pycocotools)
+                        rle = mask_utils.frPyObjects(seg, orig_h, orig_w)
+                        mask_arr = mask_utils.decode(rle)
+                        # decode may return (H,W) or (H,W,1); ensure 2D
+                        if mask_arr.ndim == 3:
+                            mask_arr = np.any(mask_arr, axis=2).astype(np.uint8)
+                # convert to PIL to resize to transformed image size (nearest)
+                mask_pil = Image.fromarray(mask_arr * 255).convert("L")
+                if (out_w, out_h) != (orig_w, orig_h):
+                    mask_pil = mask_pil.resize((out_w, out_h), resample=Image.NEAREST)
+                mask_resized = np.array(mask_pil, dtype=np.uint8)
+                # convert to 0/1
+                mask_resized = (mask_resized > 127).astype(np.uint8)
+                labels["masks"].append(torch.from_numpy(mask_resized))  # uint8 tensor HxW
 
-        if self.get_features:
-            if self.caption_sampling == "first":
-                features = [
-                    torch.load(f"{self.cache_path}/coco/captions/{id}_0.pt").detach()
-                ]
-            elif self.caption_sampling == "random":
-                caption = np.random.choice(list(range(5)))
-                features = [
-                    torch.load(
-                        f"{self.cache_path}/coco/captions/{id}_{caption}.pt"
-                    ).detach()
-                ]
-            elif self.caption_sampling == "mean":
-                features = []
-                for caption in range(5):
-                    features += [
+
+        # convert to tensor
+        labels["cls"] = torch.tensor(labels["cls"], dtype=torch.long) 
+        labels["bboxes"] = torch.tensor(labels["bboxes"], dtype=torch.float)
+
+        if self.seg:
+            if len(labels["masks"]):
+                # stack into (N, H, W) uint8 tensor
+                labels["masks"] = torch.stack(labels["masks"]).to(dtype=torch.uint8)
+            else:
+                # no instances: empty tensor with correct spatial dims
+                labels["masks"] = torch.empty((0, out_h, out_w), dtype=torch.uint8)
+
+            if self.get_features:
+                if self.caption_sampling == "first":
+                    features = [
+                        torch.load(f"{self.cache_path}/coco/captions/{id}_0.pt").detach()
+                    ]
+                elif self.caption_sampling == "random":
+                    caption = np.random.choice(list(range(5)))
+                    features = [
                         torch.load(
                             f"{self.cache_path}/coco/captions/{id}_{caption}.pt"
                         ).detach()
                     ]
+                elif self.caption_sampling == "mean":
+                    features = []
+                    for caption in range(5):
+                        features += [
+                            torch.load(
+                                f"{self.cache_path}/coco/captions/{id}_{caption}.pt"
+                            ).detach()
+                        ]
 
-            return id, image, features
+                return id, image, features
 
-        return int(image_id), image, labels
+        return int(image_id), image, labels 
 
+    
     def collate_fn(self, batch):
         if self.get_features:
             images = torch.stack([item[1] for item in batch])
@@ -143,14 +194,35 @@ class COCODataset(torch.utils.data.Dataset):
         else:
             ids = [item[0] for item in batch]
             images = torch.stack([item[1] for item in batch], dim=0)
-            labels = {}
-            labels["cls"] = torch.cat([item[2]["cls"] for item in batch])
-            labels["bboxes"] = torch.cat([item[2]["bboxes"] for item in batch])
-            batch_ids = []
+
+            labels = {"cls": [], "bboxes": [], "batch_idx": []}
+            if "masks" in batch[0][2]:
+                labels["masks"] = []      
+
             for batch_id, item in enumerate(batch):
-                batch_ids += [torch.ones(len(item[2]["cls"])) * batch_id]
-            labels["batch_idx"] = torch.cat(batch_ids, dim=0)
-            return ids, images, labels
+                lab = item[2]
+                n = len(lab["cls"])
+
+                labels["cls"].append(lab["cls"])
+                labels["bboxes"].append(lab["bboxes"])
+                labels["batch_idx"].append(torch.full((n,), batch_id))
+
+                if "masks" in lab:
+                    labels["masks"].append(lab["masks"])
+
+            labels["cls"] = torch.cat(labels["cls"])
+            labels["bboxes"] = torch.cat(labels["bboxes"])
+            labels["batch_idx"] = torch.cat(labels["batch_idx"])
+            if labels["masks"]: 
+                # masks_list is list of (n_i, H, W); concatenate along instance dim -> (N_total, H, W) 
+                labels["masks"] = torch.cat(labels["masks"], dim=0) 
+            else: 
+                # no masks in batch 
+                _, H, W = images.shape[0], images.shape[2], images.shape[3] 
+                # not used; safer to infer from images 
+                labels["masks"] = torch.empty((0, images.shape[2], images.shape[3]), dtype=torch.uint8) 
+
+            return ids, images, labels 
 
 
 if __name__ == "__main__":
