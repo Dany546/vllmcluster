@@ -29,8 +29,9 @@ cd ~/MIRO/vllmcluster
 # rm -rf distances/*clip*
 # cd ~/MIRO/vllmcluster
 
-source dino/bin/activate
-python main.py --model="dinov3_attention" 
+source dino/bin/activate 
+pytest -q test_cocodataset_augmentation_integration.py -s
+# python main.py --model="yolov8s-seg.pt,yolov8x-seg.pt,yolo12s-seg.pt,yolo12x-seg.pt" 
 # source visu/bin/activate
 # pip install ipywidgets IPython --quiet
 # python main.py --visu
