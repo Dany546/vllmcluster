@@ -117,7 +117,6 @@ def load_vectors_from_db(db_path, algo, run_id, ids=None):
     if result is None:
         conn.close()
         raise ValueError(f"Run ID {run_id} not found in metadata")
-    n_dims = result[0]
     
     # Load vectors
     if ids is None:
