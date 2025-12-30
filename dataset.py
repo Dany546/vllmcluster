@@ -214,7 +214,7 @@ class COCODataset(torch.utils.data.Dataset):
                 masks.append(self._ann_to_mask(ann, orig_w, orig_h))
 
         # Albumentations expects numpy HWC
-        image_np = np.array(orig_image)
+        image_np = np.array(orig_image) 
 
         # If there are no boxes, pass empty lists (albumentations handles them)
         if self.seg:
@@ -223,7 +223,7 @@ class COCODataset(torch.utils.data.Dataset):
             transformed = self.transform(image=image_np, bboxes=bboxes, category_ids=category_ids)
 
         # image comes as tensor CHW from ToTensorV2
-        image_t = transformed["image"]  # torch.Tensor CxHxW
+        image_t = transformed["image"].to(torch.float32)  # torch.Tensor CxHxW
 
         transformed_bboxes = transformed.get("bboxes", [])
         transformed_labels = transformed.get("category_ids", [])
@@ -297,6 +297,7 @@ class COCODataset(torch.utils.data.Dataset):
         else:
             labels["masks"] = torch.empty((0, images.shape[2], images.shape[3]), dtype=torch.uint8)
 
+        print(images.type())
         return ids, images, labels
 
     

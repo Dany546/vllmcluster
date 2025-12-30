@@ -34,6 +34,22 @@ def cluster(args):
 
     if args.model is None:
         models = [f"yolo{i}{j}.pt" for i in ["v8", "12"] for j in ["s", "x"]]
+    elif args.model == "all":
+        models = [
+            "yolov8s-seg.pt",
+            "yolov8x-seg.pt",
+            "yolo12s-seg.pt",
+            "yolo12x-seg.pt",
+            "yolov8s.pt",
+            "yolov8x.pt",
+            "yolo12s.pt",
+            "yolo12x.pt",
+            "dino",
+            "dino_attention",
+            "dinov3",
+            "dinov3_attention",
+            "clip",
+        ]
     else:
         models = args.model.split(",")
 
