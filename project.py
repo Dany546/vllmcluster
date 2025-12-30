@@ -46,7 +46,6 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
         projector = UMAP(**hyperparams, random_state=42)
 
     embedding = projector.fit_transform(X)
-    n_dims = embedding.shape[1]
 
     # Connect to DB
     conn = sqlite3.connect(os.path.join(db_path, f"{algo}.db"))
@@ -85,10 +84,10 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
         conn.commit()
 
     # Insert metadata with n_components
-    cols = ", ".join(["model", "n_components"] + list(hyperparams.keys()))
-    placeholders = ", ".join(["?"] * (len(hyperparams) + 3))  # run_id + model + n_components + hyperparams
+    cols = ", ".join(["model"] + list(hyperparams.keys()))
+    placeholders = ", ".join(["?"] * (len(hyperparams) + 2))  # run_id + model + hyperparams
     sql = f"INSERT OR REPLACE INTO metadata(run_id, {cols}) VALUES ({placeholders})"
-    cur.execute(sql, (run_id, model_name, n_dims, *hyperparams.values()))
+    cur.execute(sql, (run_id, model_name, *hyperparams.values()))
 
     conn.commit()
     conn.close()
@@ -241,7 +240,7 @@ def get_tasks(all_hyperparams, model_name):
         )
         cur = conn.cursor()
         cols = ", ".join(
-            ["model TEXT", "n_components INTEGER"] + [str(h) + " REAL" for h in hyperparam.keys() if h != "algo"]
+            ["model TEXT"] + [str(h) + " REAL" for h in hyperparam.keys() if h != "algo"]
         )
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS metadata (
