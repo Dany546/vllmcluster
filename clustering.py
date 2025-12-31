@@ -391,100 +391,123 @@ class Clustering_layer:
         data_loader,
         pragma_speed: bool = True,
     ) -> Tuple[str, str]:
-        """Compute pairwise distances and store them in SQLite without loading the full matrix."""
+        """Compute pairwise distances and store embeddings in a vector-enabled SQLite DB."""
         batch_size = len(next(iter(data_loader))[0])
         embeddings_db = self.embeddings_db
-        distances_db = self.distances_db
+        distances_db = self.distances_db  # you can keep this path if you want to store other info
 
-        # --- Open embeddings DB ---
-        emb_conn = sqlite3.connect(embeddings_db, timeout=30)
-        if pragma_speed:
-            emb_conn.execute("PRAGMA journal_mode=WAL")
-            emb_conn.execute("PRAGMA synchronous=OFF")
-            emb_conn.execute("PRAGMA temp_store=MEMORY")
-            emb_conn.execute("PRAGMA cache_size=-20000")
-        emb_cursor = emb_conn.cursor()
-        
-        # Create table schema based on model type
+        # --- Open vector-enabled embeddings DB ---
+        from sqlvector_utils import connect_vec_db, create_embeddings_table, serialize_float32_array, insert_embeddings_batch, build_vector_index
+
+        emb_conn = connect_vec_db(embeddings_db)
+        # dimension: infer from model output by running one batch or set explicitly
+        # Here we infer from a dummy forward pass if possible
+        # We'll assume model returns embeddings of shape [B, D] when called with images
+        # Use a small sample to infer dim
+        sample_batch = next(iter(data_loader))
+        sample_images = sample_batch[1].to(device) if isinstance(sample_batch, tuple) else sample_batch[0].to(device)
         if "yolo" in self.model_name:
-            if self.is_seg:
-                # Segmentation model schema
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS embeddings (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        embedding BLOB,
-                        hit_freq REAL,
-                        mean_iou REAL,
-                        mean_conf REAL,
-                        mean_dice REAL,
-                        flag_cat INTEGER,
-                        flag_supercat INTEGER,
-                        box_loss REAL,
-                        cls_loss REAL,
-                        dfl_loss REAL,
-                        seg_loss REAL
-                    )
-                """)
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS predictions (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        iou BLOB,
-                        conf BLOB,
-                        dice BLOB,
-                        cat BLOB,
-                        supercat BLOB
-                    )
-                """)
-            else:
-                # Detection model schema
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS embeddings (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        embedding BLOB,
-                        hit_freq REAL,
-                        mean_iou REAL,
-                        mean_conf REAL,
-                        flag_cat INTEGER,
-                        flag_supercat INTEGER,
-                        box_loss REAL,
-                        cls_loss REAL,
-                        dfl_loss REAL
-                    )
-                """)
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS predictions (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        iou BLOB,
-                        conf BLOB,
-                        cat BLOB,
-                        supercat BLOB
-                    )
-                """)
+            sample_emb, _, _ = self.model(sample_images[:1], None)
+            dim = sample_emb.shape[1]
         else:
-            # Non-YOLO models (DINO, CLIP)
-            emb_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS embeddings (
-                    id INTEGER PRIMARY KEY,
-                    img_id INTEGER,
-                    embedding BLOB,
-                    hit_freq REAL,
-                    mean_iou REAL,
-                    mean_conf REAL,
-                    flag_cat INTEGER,
-                    flag_supercat INTEGER
-                )
-            """)
-        
-        emb_cursor.execute(
-            "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value INTEGER)"
-        )
-        emb_conn.commit()
+            sample_emb = self.model(sample_images[:1])
+            dim = sample_emb.shape[1]
 
-        # Setup distances database
+        create_embeddings_table(emb_conn, dim, is_seg=self.is_seg)
+
+        # --- Insert embeddings while regenerating them ---
+        emb_conn.close()
+        emb_conn = connect_vec_db(embeddings_db)
+        total_inserted = 0
+        for batch_ids, (img_ids, images, labels) in enumerate(data_loader):
+            images = images.to(device)
+            if "yolo" in self.model_name:
+                emb, outputs, all_output = self.model(images, labels)
+            else:
+                emb = self.model(images)
+
+            rows = []
+            if "yolo" in self.model_name:
+                if self.is_seg:
+                    for id, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
+                        miou, mconf, cat, supercat, hit_freq, dice = output[:6]
+                        # losses appended at end if compute_losses used; adapt if different
+                        # Use defaults if not present
+                        box_loss = output[6] if len(output) > 6 else 0.0
+                        cls_loss = output[7] if len(output) > 7 else 0.0
+                        dfl_loss = output[8] if len(output) > 8 else 0.0
+                        seg_loss = output[9] if len(output) > 9 else 0.0
+                        emb_bytes = serialize_float32_array(vec.numpy())
+                        row = (
+                            int((batch_ids * batch_size) + id),
+                            int(img_id),
+                            emb_bytes,
+                            float(hit_freq),
+                            float(miou),
+                            float(mconf),
+                            float(dice),
+                            int(cat),
+                            int(supercat),
+                            float(box_loss),
+                            float(cls_loss),
+                            float(dfl_loss),
+                            float(seg_loss),
+                        )
+                        rows.append(row)
+                else:
+                    for id, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
+                        miou, mconf, cat, supercat, hit_freq, dice = output[:6]
+                        box_loss = output[6] if len(output) > 6 else 0.0
+                        cls_loss = output[7] if len(output) > 7 else 0.0
+                        dfl_loss = output[8] if len(output) > 8 else 0.0
+                        emb_bytes = serialize_float32_array(vec.numpy())
+                        row = (
+                            int((batch_ids * batch_size) + id),
+                            int(img_id),
+                            emb_bytes,
+                            float(hit_freq),
+                            float(miou),
+                            float(mconf),
+                            int(cat),
+                            int(supercat),
+                            float(box_loss),
+                            float(cls_loss),
+                            float(dfl_loss),
+                        )
+                        rows.append(row)
+            else:
+                for id, (img_id, vec, label) in enumerate(zip(img_ids, emb.cpu(), labels["cls"])):
+                    cpu_labels = label.numpy()
+                    values, counts = np.unique(cpu_labels, return_counts=True)
+                    most_frequent_cat = int(values[np.argmax(counts)])
+                    super_cat = [cat_to_super[cat] for cat in cpu_labels]
+                    values2, counts2 = np.unique(super_cat, return_counts=True)
+                    most_frequent_supercat = int(values2[np.argmax(counts2)])
+                    emb_bytes = serialize_float32_array(vec.numpy())
+                    row = (
+                        int((batch_ids * batch_size) + id),
+                        int(img_id),
+                        emb_bytes,
+                        0.0,
+                        0.0,
+                        0.0,
+                        int(most_frequent_cat),
+                        int(most_frequent_supercat),
+                    )
+                    rows.append(row)
+
+            if rows:
+                insert_embeddings_batch(emb_conn, rows)
+                total_inserted += len(rows)
+
+        # Build index once after all inserts
+        build_vector_index(emb_conn)
+        emb_conn.execute('INSERT OR REPLACE INTO metadata VALUES (?, ?)', ("total_count", str(total_inserted)))
+        emb_conn.commit()
+        emb_conn.close()
+
+        # Optionally keep distances DB for other uses, but we no longer precompute all pairwise distances here.
+        # If you still need a distances DB for compatibility, you can keep creating it but leave it empty or compute on demand.
         dist_conn = sqlite3.connect(distances_db)
         dist_conn.execute("PRAGMA journal_mode=WAL")
         dist_conn.execute("PRAGMA synchronous=OFF")
@@ -505,208 +528,7 @@ class Clustering_layer:
         dist_cursor.execute("CREATE INDEX IF NOT EXISTS idx_i ON distances(i)")
         dist_cursor.execute("CREATE INDEX IF NOT EXISTS idx_j ON distances(j)")
         dist_conn.commit()
-
-        # Step 1: Check and compute embeddings
-        emb_cursor.execute('SELECT value FROM metadata WHERE key = "total_count"')
-        result = emb_cursor.fetchone()
-        existing_count = result[0] if result else 0
-
-        if existing_count == 0:
-            self.logger.info("Computing embeddings from scratch...")
-        else:
-            self.logger.info(f"Found {existing_count} existing embeddings ...")
-
-        idx = existing_count
-        new_embeddings = 0
-        if existing_count < len(data_loader.dataset):
-            data_loader.start_idx = existing_count
-            for batch_ids, (img_ids, images, labels) in enumerate(data_loader):
-                images = images.to(device)
-                if "yolo" in self.model_name:
-                    emb, outputs, all_output = self.model(images, labels)
-                else:
-                    emb = self.model(images)
-
-                if "yolo" in self.model_name:
-                    row = []
-                    all_row = []
-                    
-                    if self.is_seg:
-                        # Segmentation model: include Dice and seg_loss
-                        for id, (img_id, vec, output) in enumerate(
-                            zip(img_ids, emb.cpu(), outputs)
-                        ):
-                            miou, mconf, cat, supercat, hit_freq, dice, box_loss, cls_loss, dfl_loss, seg_loss = output
-                            row.append([
-                                int((batch_ids * batch_size) + id),
-                                int(img_id),
-                                vec.numpy().tobytes(),
-                                hit_freq,
-                                miou,
-                                mconf,
-                                dice,
-                                cat,
-                                supercat,
-                                box_loss,
-                                cls_loss,
-                                dfl_loss,
-                                seg_loss,
-                            ])
-                        emb_cursor.executemany(
-                            "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            row,
-                        )
-                        for id, (img_id, miou, mconf, cat, supercat, dice) in enumerate(
-                            all_output
-                        ):
-                            all_row.append([
-                                int(batch_ids * batch_size + id),
-                                int(img_id),
-                                miou.tobytes(),
-                                mconf.tobytes(),
-                                dice.tobytes(),
-                                cat.tobytes(),
-                                supercat.tobytes(),
-                            ])
-                        emb_cursor.executemany(
-                            "INSERT OR IGNORE INTO predictions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            all_row,
-                        )
-                    else:
-                        # Detection model: no Dice or seg_loss
-                        for id, (img_id, vec, output) in enumerate(
-                            zip(img_ids, emb.cpu(), outputs)
-                        ):
-                            miou, mconf, cat, supercat, hit_freq, dice, box_loss, cls_loss, dfl_loss = output
-                            row.append([
-                                int((batch_ids * batch_size) + id),
-                                int(img_id),
-                                vec.numpy().tobytes(),
-                                hit_freq,
-                                miou,
-                                mconf,
-                                cat,
-                                supercat,
-                                box_loss,
-                                cls_loss,
-                                dfl_loss,
-                            ])
-                        emb_cursor.executemany(
-                            "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            row,
-                        )
-                        for id, (img_id, miou, mconf, cat, supercat, dice) in enumerate(
-                            all_output
-                        ):
-                            all_row.append([
-                                int(batch_ids * batch_size + id),
-                                int(img_id),
-                                miou.tobytes(),
-                                mconf.tobytes(),
-                                cat.tobytes(),
-                                supercat.tobytes(),
-                            ])
-                        emb_cursor.executemany(
-                            "INSERT OR IGNORE INTO predictions VALUES (?, ?, ?, ?, ?, ?)",
-                            all_row,
-                        )
-                else:
-                    row = []
-                    for id, (img_id, vec, label) in enumerate(
-                        zip(img_ids, emb.cpu(), labels["cls"])
-                    ):
-                        cpu_labels = label.numpy()
-                        values, counts = np.unique(cpu_labels, return_counts=True)
-                        most_frequent_cat = values[np.argmax(counts)]
-                        super_cat = [cat_to_super[cat] for cat in cpu_labels]
-                        values, counts = np.unique(super_cat, return_counts=True)
-                        most_frequent_supercat = values[np.argmax(counts)]
-                        row.append([
-                            int((batch_ids * batch_size) + id),
-                            int(img_id),
-                            vec.numpy().tobytes(),
-                            0,
-                            0,
-                            0,
-                            most_frequent_cat,
-                            most_frequent_supercat,
-                        ])
-                    emb_cursor.executemany(
-                        "INSERT OR IGNORE INTO embeddings VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        row,
-                    )
-                emb_conn.commit()
-                idx += len(images)
-                new_embeddings += len(images)
-
-        if new_embeddings > 0:
-            emb_cursor.execute(
-                'INSERT OR REPLACE INTO metadata VALUES ("total_count", ?)', (idx,)
-            )
-            emb_conn.commit()
-            self.logger.info(f"Added {new_embeddings} new embeddings. Total: {idx}")
-        else:
-            self.logger.info(f"All {existing_count} embeddings already computed")
-
-        emb_conn.close()
-        emb_conn = sqlite3.connect(embeddings_db, timeout=30)
-        emb_cursor = emb_conn.cursor()
-
-        # Step 2: Compute distances with efficient resume
-        n_samples = len(data_loader.dataset)
-        n_blocks = len(data_loader)
-
-        self.logger.info(
-            f"Computing distances for {n_samples} samples ({n_blocks} x {n_blocks} blocks)..."
-        )
-
-        def load_block(i_block):
-            start = int(i_block * batch_size)
-            end = int(min((i_block + 1) * batch_size, n_samples))
-            emb_cursor.execute(
-                "SELECT img_id, embedding FROM embeddings WHERE id >= ? AND id < ?",
-                (start, end),
-            )
-            idx, emb = [], []
-            for eid, blob in emb_cursor.fetchall():
-                idx.append(int(eid))
-                emb.append(np.frombuffer(blob, dtype=np.float32))
-            return idx, torch.from_numpy(np.stack(emb)).to(device)
-
-        for i_block in range(n_blocks):
-            try:
-                idx_i, emb_i = load_block(i_block)
-            except Exception as e:
-                self.logger.error(f"Error loading block {i_block}: {e}")
-                raise
-
-            if emb_i is None or emb_i.shape[0] == 0:
-                self.logger.info(f"Skipping empty line {i_block}: {emb_i.cpu()}")
-                continue
-
-            for j_block in range(i_block, n_blocks):  # only upper triangle
-                idx_j, emb_j = load_block(j_block)
-                if emb_j is None:
-                    self.logger.info(f"Skipping empty column {j_block}")
-                    continue
-
-                dist_block = torch.cdist(emb_i, emb_j, p=2).cpu().numpy()
-
-                rows = np.column_stack([
-                    np.repeat([gid for gid in idx_i], len(idx_j)),
-                    np.tile([gid for gid in idx_j], len(idx_i)),
-                    dist_block.ravel(),
-                ]).tolist()
-
-                dist_cursor.executemany(
-                    "INSERT OR REPLACE INTO distances (i, j, distance) VALUES (?, ?, ?)",
-                    rows,
-                )
-
-            dist_conn.commit()
-            self.logger.debug(f"Completed block row {i_block + 1}/{n_blocks}")
-
-        self.logger.info("Distance computation complete")
-        emb_conn.close()
         dist_conn.close()
+
+        self.logger.info(f"Inserted {total_inserted} embeddings into {embeddings_db} and built index")
         return embeddings_db, distances_db
