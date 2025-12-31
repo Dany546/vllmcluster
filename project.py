@@ -41,7 +41,7 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
 
     # Instantiate projector
     if algo == "tsne":
-        projector = TSNE(**hyperparams, random_state=42)
+        projector = TSNE(**hyperparams, random_state=42, method="exact")
     else:
         projector = UMAP(**hyperparams, random_state=42)
 
@@ -53,44 +53,109 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS embeddings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER,
             run_id TEXT,
-            x FLOAT,
-            y FLOAT,
+            vector BLOB,
+            PRIMARY KEY(id, run_id),
             FOREIGN KEY(run_id) REFERENCES metadata(run_id)
         )
     """)
-    # Insert embeddings
+    
+    # Insert embeddings in batches
     rows = []
-    for i, (x, y) in enumerate(embedding):
+    for i, vec in enumerate(embedding):
+        # Serialize vector as bytes
+        vec_blob = vec.astype(np.float32).tobytes()
+        rows.append((int(i), run_id, vec_blob))
+        
         if len(rows) >= 128:
             cur.executemany(
-                "INSERT OR IGNORE INTO embeddings(id, run_id, x, y) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO embeddings(id, run_id, vector) VALUES (?, ?, ?)",
                 rows,
             )
             rows = []
             conn.commit()
-        rows.append((int(i), run_id, float(x), float(y)))
 
     if len(rows) > 0:
-        query = (
-            """INSERT OR IGNORE INTO embeddings(id, run_id, x, y) VALUES (?, ?, ?, ?)"""
+        cur.executemany(
+            "INSERT OR REPLACE INTO embeddings(id, run_id, vector) VALUES (?, ?, ?)",
+            rows
         )
-        cur.executemany(query, rows)
         conn.commit()
 
-    # Insert metadata
+    # Insert metadata with n_components
     cols = ", ".join(["model"] + list(hyperparams.keys()))
-    placeholders = ", ".join(
-        ["?"] * (len(hyperparams) + 1 + 1)
-    )  # run_id + model + hyperparams
-    sql = f"INSERT INTO metadata(run_id, {cols}) VALUES ({placeholders})"
+    placeholders = ", ".join(["?"] * (len(hyperparams) + 2))  # run_id + model + hyperparams
+    sql = f"INSERT OR REPLACE INTO metadata(run_id, {cols}) VALUES ({placeholders})"
     cur.execute(sql, (run_id, model_name, *hyperparams.values()))
 
     conn.commit()
     conn.close()
 
     return run_id
+
+
+def load_vectors_from_db(db_path, algo, run_id, ids=None):
+    """
+    Load vectors from database for a given run_id.
+    
+    Args:
+        db_path: Path to database directory
+        algo: Algorithm name ('tsne' or 'umap')
+        run_id: Run identifier
+        ids: Optional list of specific IDs to load (for visualization)
+    
+    Returns:
+        numpy array of shape (n_samples, n_dims)
+    """
+    conn = sqlite3.connect(os.path.join(db_path, f"{algo}.db"))
+    cur = conn.cursor()
+    
+    # Get n_components from metadata
+    cur.execute("SELECT n_components FROM metadata WHERE run_id=?", (run_id,))
+    result = cur.fetchone()
+    if result is None:
+        conn.close()
+        raise ValueError(f"Run ID {run_id} not found in metadata")
+    
+    # Load vectors
+    if ids is None:
+        cur.execute("SELECT id, vector FROM embeddings WHERE run_id=? ORDER BY id", (run_id,))
+    else:
+        placeholders = ",".join("?" * len(ids))
+        cur.execute(
+            f"SELECT id, vector FROM embeddings WHERE run_id=? AND id IN ({placeholders}) ORDER BY id",
+            (run_id, *ids)
+        )
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    # Deserialize vectors
+    vectors = []
+    for row_id, vec_blob in rows:
+        vec = np.frombuffer(vec_blob, dtype=np.float32).reshape(-1)
+        vectors.append(vec)
+    
+    return np.array(vectors)
+
+
+def get_vector_slice(db_path, algo, run_id, ids=None, dims=[0, 1]):
+    """
+    Get specific dimensions from vectors (useful for 2D visualization).
+    
+    Args:
+        db_path: Path to database directory
+        algo: Algorithm name
+        run_id: Run identifier
+        ids: Optional specific IDs to load
+        dims: List of dimension indices to extract (default [0,1] for x,y)
+    
+    Returns:
+        numpy array of shape (n_samples, len(dims))
+    """
+    vectors = load_vectors_from_db(db_path, algo, run_id, ids)
+    return vectors[:, dims]
 
 
 def compute_and_store_metrics(model_name, data, db_path=""):
@@ -174,11 +239,11 @@ def get_tasks(all_hyperparams, model_name):
         )
         cur = conn.cursor()
         cols = ", ".join(
-            ["model TEXT"] + list(str(h) + " REAL" for h in hyperparam.keys())
+            ["model TEXT"] + [str(h) + " REAL" for h in hyperparam.keys() if h != "algo"]
         )
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS metadata (
-                run_id TEXT,
+                run_id TEXT PRIMARY KEY,
                 {cols}
             )
         """)
@@ -190,11 +255,11 @@ def get_tasks(all_hyperparams, model_name):
         else:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS embeddings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id INTEGER,
                     run_id TEXT,
-                    x FLOAT,
-                    y FLOAT,
-                FOREIGN KEY(run_id) REFERENCES metadata(run_id)
+                    vector BLOB,
+                    PRIMARY KEY(id, run_id),
+                    FOREIGN KEY(run_id) REFERENCES metadata(run_id)
                 )
             """)
             cur.execute("SELECT COUNT(*) FROM embeddings WHERE run_id=?", (run_id,))

@@ -231,6 +231,7 @@ def work_fn(args):
         num_folds,
         cv_type,
         distance_metric,
+        n_components,
         target_name,
         kf,
     ) = args
