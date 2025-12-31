@@ -120,7 +120,7 @@ def main(args):
     )
     if args.visu:
         # from cluster_visualization import visualize_clusters
-        from project import project
+        from project_refactor import project
 
         # visualize_clusters(args)
         project(args)

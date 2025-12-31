@@ -404,13 +404,13 @@ class Clustering_layer:
         # Here we infer from a dummy forward pass if possible
         # We'll assume model returns embeddings of shape [B, D] when called with images
         # Use a small sample to infer dim
-        sample_batch = next(iter(data_loader))
-        sample_images = sample_batch[1].to(device) if isinstance(sample_batch, tuple) else sample_batch[0].to(device)
+        img_ids, sample_images, labels = next(iter(data_loader))
+        sample_images = sample_images.to(device) 
         if "yolo" in self.model_name:
-            sample_emb, _, _ = self.model(sample_images[:1], None)
+            sample_emb, _, _ = self.model(sample_images, labels)
             dim = sample_emb.shape[1]
         else:
-            sample_emb = self.model(sample_images[:1])
+            sample_emb = self.model(sample_images)
             dim = sample_emb.shape[1]
 
         create_embeddings_table(emb_conn, dim, is_seg=self.is_seg)
@@ -488,11 +488,8 @@ class Clustering_layer:
                         int((batch_ids * batch_size) + id),
                         int(img_id),
                         emb_bytes,
-                        0.0,
-                        0.0,
-                        0.0,
-                        int(most_frequent_cat),
-                        int(most_frequent_supercat),
+                        0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0,
                     )
                     rows.append(row)
 
