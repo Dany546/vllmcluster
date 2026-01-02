@@ -79,6 +79,7 @@ def load_embeddings(db_path, query: Optional[str] = None):
             conn,
         )
         conn.close()
+        df.pop("run_id")
         return df[["x", "y"]].values
     else:
         if query is None:
