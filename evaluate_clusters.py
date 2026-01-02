@@ -141,9 +141,20 @@ def get_lower_dim_tables():
     for db in ["tsne.db", "umap.db"]:
         conn = sqlite3.connect(os.path.join(db_path, db))
         c = conn.cursor()
-        c.execute(
-            """ DELETE FROM metadata WHERE run_id NOT IN ( SELECT DISTINCT run_id FROM embeddings ); """
-        )
+        # Try to remove orphan metadata entries. Support both legacy `embeddings`
+        # table and sql-vector `vec_projections` fallback.
+        try:
+            c.execute(
+                """ DELETE FROM metadata WHERE run_id NOT IN ( SELECT DISTINCT run_id FROM embeddings ); """
+            )
+        except sqlite3.OperationalError:
+            try:
+                c.execute(
+                    """ DELETE FROM metadata WHERE run_id NOT IN ( SELECT DISTINCT run_id FROM vec_projections ); """
+                )
+            except Exception:
+                # nothing we can do safely here
+                pass
         conn.commit()
     # Load embedding runs
     tables = []
@@ -152,9 +163,16 @@ def get_lower_dim_tables():
         lower_table_name = lower_table.split("/")[-1].split(".")[0]
         conn = sqlite3.connect(lower_table)
         c = conn.cursor()
-        embed_runs = {
-            row[0] for row in c.execute("SELECT DISTINCT run_id FROM embeddings")
-        }
+        # Prefer legacy `embeddings` table, but fall back to vec_projections when present
+        try:
+            c.execute("SELECT DISTINCT run_id FROM embeddings")
+            embed_runs = {row[0] for row in c.fetchall()}
+        except sqlite3.OperationalError:
+            try:
+                c.execute("SELECT DISTINCT run_id FROM vec_projections")
+                embed_runs = {row[0] for row in c.fetchall()}
+            except sqlite3.OperationalError:
+                embed_runs = set()
         new_tables = [
             f"{run_id.split('_')[0]}.{lower_table_name}.{run_id.split('_')[-1]}"
             for run_id in embed_runs

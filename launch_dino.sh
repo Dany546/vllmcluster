@@ -25,17 +25,18 @@ cd ~/MIRO/vllmcluster
 # trap cleanup SIGINT SIGTERM EXIT
 
 # cd $GLOBALSCRATCH/dino
-# rm -rf embeddings/*clip*
-# rm -rf distances/*clip*
+# rm -rf embeddings/*
+# rm -rf distances/*
+# rm -rf proj/*
 # cd ~/MIRO/vllmcluster
 
 source dino/bin/activate 
-pytest -q test_cocodataset_augmentation_integration.py -s
-# python main.py --model="yolov8s-seg.pt,yolov8x-seg.pt,yolo12s-seg.pt,yolo12x-seg.pt" 
-# source visu/bin/activate
-# pip install ipywidgets IPython --quiet
+
+# python test_sqlvector_refactor.py
+# pytest -q test_cocodataset_augmentation_integration.py -s
+# python main.py --model="dino,dino_attention,dinov3,dinov3_attention,clip" 
 # python main.py --visu
-# python main.py --knn
+python main.py --knn
 
 # cleanup
 

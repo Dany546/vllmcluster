@@ -48,7 +48,8 @@ def list_proj_runs(proj_dir: str) -> Tuple[List[str], List[str]]:
                 model, hashpart = run_id.split("_", 1)
                 table_names.append(f"{model}.{algo}.{hashpart}")
             else:
-                table_names.append(f"{run_id}.{algo}.")
+                # Fallback: use the run_id as both model and hash when no separator
+                table_names.append(f"{run_id}.{algo}.{run_id}")
             table_paths.append(db)
 
     return table_names, table_paths

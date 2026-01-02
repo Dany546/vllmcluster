@@ -27,73 +27,442 @@ Activating Modules:
 Activating Modules:
   1) CUDA/12.5.0
 
-
-[notice] A new release of pip is available: 23.2.1 -> 25.3
-[notice] To update, run: pip install --upgrade pip
+wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
 wandb: Tracking run with wandb version 0.23.1
-wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/offline-run-20251230_140524-7x4mp203
-[INFO] Computing embeddings from scratch...
-[INFO] Added 5000 new embeddings. Total: 5000
-[INFO] Computing distances for 5000 samples (79 x 79 blocks)...
-[INFO] Distance computation complete
-[INFO] Computing embeddings from scratch...
-Traceback (most recent call last):
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 156, in <module>
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 116, in main
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 79, in cluster
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/amp/autocast_mode.py", line 44, in decorate_autocast
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/clustering.py", line 526, in distance_matrix_db
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/clustering.py", line 309, in forward
-    self.logger.info(f"Found {existing_count} existing embeddings ...")
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/clustering.py", line 116, in compute_losses
-    correct += 1
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/ultralytics/nn/tasks.py", line 136, in forward
-    return self.loss(x, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/ultralytics/nn/tasks.py", line 328, in loss
-    return self.criterion(preds, batch)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/ultralytics/utils/loss.py", line 350, in __call__
-    _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
-                                                              ^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/ultralytics/utils/tal.py", line 79, in forward
-    return self._forward(pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/ultralytics/utils/tal.py", line 109, in _forward
-    target_gt_idx, fg_mask, mask_pos = self.select_highest_overlaps(mask_pos, overlaps, self.n_max_boxes)
-                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/ultralytics/utils/tal.py", line 303, in select_highest_overlaps
-    fg_mask = mask_pos.sum(-2)
-              ^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/torch/utils/data/_utils/signal_handling.py", line 73, in handler
-    _error_if_any_worker_fails()
-RuntimeError: DataLoader worker (pid 933394) is killed by signal: Killed. 
-slurmstepd: error: Detected 1 oom_kill event in StepId=66733646.batch. Some of the step tasks have been OOM Killed.
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251231_193542-t5c8j26j
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run dutiful-feather-478
+wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/t5c8j26j
+[INFO] Inserted 5000 embeddings into /globalscratch/ucl/irec/darimez/dino/embeddings/dino.db and built index
+[INFO] Inserted 5000 embeddings into /globalscratch/ucl/irec/darimez/dino/embeddings/dino_attention.db and built index
+[INFO] Inserted 5000 embeddings into /globalscratch/ucl/irec/darimez/dino/embeddings/dinov3.db and built index
+[INFO] Inserted 5000 embeddings into /globalscratch/ucl/irec/darimez/dino/embeddings/dinov3_attention.db and built index
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+[INFO] Inserted 5000 embeddings into /globalscratch/ucl/irec/darimez/dino/embeddings/clip.db and built index
+wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 89r2opgd
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251231_194619-89r2opgd
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run visu; 
+wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/89r2opgd
+root - INFO - Computing and storing metrics for model yolov8s-seg
+root - INFO - Computing projections for 108/108 parameter combinations for model yolov8s-seg
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolov8s-seg with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolov8s-seg with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing and storing metrics for model yolo12s
+root - INFO - Computing projections for 108/108 parameter combinations for model yolo12s
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model yolo12s with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 2, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 10, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 30, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model yolo12s with params {'n_components': 50, 'perplexity': 50, 'early_exaggeration': 16, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing and storing metrics for model dinov3
+root - INFO - Computing projections for 108/108 parameter combinations for model dinov3
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 15, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 30, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.02, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.1, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 2}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 10}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing umap projection for model dinov3 with params {'n_neighbors': 60, 'min_dist': 0.5, 'n_components': 50}
+/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/umap/umap_.py:1952: UserWarning: n_jobs value 1 overridden to 1 by setting random_state. Use no seed for parallelism.
+  warn(
+root - INFO - Computing tsne projection for model dinov3 with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model dinov3 with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model dinov3 with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 8, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model dinov3 with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 100, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model dinov3 with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 200, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model dinov3 with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 12, 'learning_rate': 500, 'max_iter': 1000}
+root - INFO - Computing tsne projection for model dinov3 with params {'n_components': 2, 'perplexity': 10, 'early_exaggeration': 16, 'learning_rate': 100, 'max_iter': 1000}
