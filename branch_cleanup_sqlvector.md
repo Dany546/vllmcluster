@@ -50,6 +50,31 @@ While not modifying code in this plan, note that in the vector branch, future de
 - After cleanup: `git add . && git commit -m "Clean sql-vector-refactor branch: remove legacy code"`
 - Push: `git push origin sql-vector-refactor`
 
+## Unit Test Plans
+Create or adapt unit tests in `test_sqlvector_refactor.py` to validate vector functionality:
+
+1. **Vector Storage Test**:
+   - Insert embeddings into `vec_embeddings` table.
+   - Build index and verify serialization/deserialization.
+
+2. **Index Building Test**:
+   - Populate table, call `build_vector_index`.
+   - Verify virtual table exists and responds to queries.
+
+3. **kNN Query Test**:
+   - Run `query_knn` with various k, filters.
+   - Compare results against exact `torch.cdist` on small sets.
+
+4. **Fallback Test**:
+   - Disable `sqlite_vec`, ensure linear scan fallback works.
+
+5. **Projection Test**:
+   - Compute and store projections in `vec_projections`.
+   - Load and verify against original embeddings.
+
+6. **Integration Test**:
+   - Run full pipeline: cluster -> visu -> knn, ensure vector paths work.
+
 ## Validation
 - Run a basic test: `python main.py --cluster --debug` to ensure embedding generation works with vector storage and indexing.
 - Verify KNN evaluation: `python main.py --knn --debug` uses DB queries for kNN.

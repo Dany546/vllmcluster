@@ -3,10 +3,6 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=2G
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --constraint='TeslaL40s|TeslaA100|TeslaA100_80'
-#SBATCH --qos=preemptible
 #SBATCH --job-name=dino
 #SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.out
 #SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.err

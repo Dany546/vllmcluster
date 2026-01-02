@@ -15,22 +15,64 @@ try:
     import sqlite_vec
 except Exception:
     sqlite_vec = None
+try:
+    import apsw
+except Exception:
+    apsw = None
 
 # ---------- Helpers ----------
 def connect_vec_db(db_path: str) -> sqlite3.Connection:
+    # Prefer APSW connection if available because some system builds of
+    # the CPython `sqlite3` module disable extension loading. APSW lets
+    # us load the vec0 shared lib from user-space without admin rights.
+    if apsw is not None:
+        try:
+            aconn = apsw.Connection(db_path)
+            # attempt to find vec0 shared object near sqlite_vec, or use
+            # environment override VEC0_SO if set by the user.
+            vecso = None
+            try:
+                if "VEC0_SO" in os.environ:
+                    vecso = os.environ.get("VEC0_SO")
+                elif sqlite_vec is not None:
+                    base = os.path.dirname(getattr(sqlite_vec, "__file__", ""))
+                    cand = os.path.join(base, "vec0.so")
+                    if os.path.exists(cand):
+                        vecso = cand
+            except Exception:
+                vecso = None
+
+            if vecso is not None and os.path.exists(vecso):
+                try:
+                    aconn.loadextension(vecso)
+                except Exception:
+                    pass
+            # set pragmas via an explicit execute call to keep API similar
+            try:
+                aconn.execute("PRAGMA journal_mode=WAL")
+                aconn.execute("PRAGMA synchronous=NORMAL")
+                aconn.execute("PRAGMA temp_store=MEMORY")
+            except Exception:
+                pass
+            return aconn
+        except Exception:
+            # fall back to builtin sqlite3 if APSW cannot be used
+            pass
+
+    # Fallback to stdlib sqlite3 connection
     conn = sqlite3.connect(db_path, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA cache_size=-20000")
-    # Try to register sqlite-vec via its Python loader if available
+
+    # Try to register sqlite-vec via its Python loader if available.
     if sqlite_vec is not None:
         try:
             sqlite_vec.load(conn)
-            # verify extension loaded
             conn.execute("SELECT vec_version()").fetchone()
         except Exception:
-            # ignore and fall back to linear scan behavior
+            # ignore and return the sqlite3 connection (vec0 may not be available)
             pass
     return conn
 
@@ -315,13 +357,18 @@ def knn_query_projections(db_path, algo, query_vec: np.ndarray, k: int = 10, run
             return []
         # infer dim
         dim = len(np.frombuffer(all_rows[0][4], dtype=np.float32))
+        # Build embeddings array and compute distances vectorized to avoid Python loops
         q = query_vec.astype(np.float32)
-        scored = []
-        for r in all_rows:
-            emb = deserialize_float32_array(r[4], dim)
-            dist = float(np.linalg.norm(q - emb))
-            scored.append((dist, r))
-        scored.sort(key=lambda x: x[0])
-        rows = [(*r[1][:4], d) for d, r in scored[:k]]  # format similar to vec0 result
+        blobs = [r[4] for r in all_rows]
+        embeddings = np.stack([deserialize_float32_array(b, dim) for b in blobs], axis=0)
+        # compute L2 distances in a vectorized manner
+        dif = embeddings - q.reshape(1, -1)
+        dists = np.linalg.norm(dif, axis=1)
+        # get top-k indices
+        topk_idx = np.argsort(dists)[:k]
+        rows = []
+        for idx in topk_idx:
+            r = all_rows[idx]
+            rows.append((r[0], r[1], r[2], r[3], float(dists[idx])))
     conn.close()
     return rows

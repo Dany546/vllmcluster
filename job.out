@@ -1,3 +1,6 @@
+Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolov8s-seg.db
+5000
+Number of nodes: 0
 [1;34mwandb[0m: 
-[1;34mwandb[0m: 🚀 View run [33mdutiful-feather-478[0m at: [34mhttps://wandb.ai/miro-unet/VLLM%20clustering/runs/t5c8j26j[0m
-[1;34mwandb[0m: Find logs at: [1;35m../../../../../../auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20251231_193542-t5c8j26j/logs[0m
+[1;34mwandb[0m: 🚀 View run [33mknn[0m at: [34mhttps://wandb.ai/miro-unet/VLLM%20clustering/runs/y0wfjy4x[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../../../../../auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20260102_153534-y0wfjy4x/logs[0m

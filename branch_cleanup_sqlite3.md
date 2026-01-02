@@ -48,9 +48,62 @@ While not modifying code in this plan, note that in the legacy branch, future de
 - After cleanup: `git add . && git commit -m "Clean sqlite3-legacy branch: remove vector code"`
 - Push: `git push origin sqlite3-legacy`
 
+## Unit Test Plans
+Create or adapt unit tests in `test_sqlite3_legacy.py` to validate legacy functionality:
+
+1. **Embedding Storage Test**:
+   - Generate synthetic embeddings, insert into DB as BLOBs.
+   - Retrieve and verify deserialization matches original numpy arrays.
+
+2. **Distance Matrix Test**:
+   - Compute O(N²) distances using `torch.cdist`, store in `distances` table.
+   - Load matrix and verify against recomputed distances.
+
+3. **KNN Evaluation Test**:
+   - Use sklearn KNN on loaded embeddings/distances.
+   - Compare predictions against expected results for small datasets.
+
+4. **Projection Loading Test**:
+   - Store projections in legacy tables (`comp_*` columns).
+   - Load and verify shapes/dimensions.
+
+5. **Integration Test**:
+   - Run full pipeline: cluster -> visu -> knn, ensure no errors.
+
 ## Validation
 - Run a basic test: `python main.py --cluster --debug` to ensure embedding generation works with BLOB storage.
 - Verify KNN evaluation: `python main.py --knn --debug` loads distances correctly.
 - Check that no vector-related imports fail (e.g., no `sqlite_vec` errors).
+
+## Specific Refactor Actions
+Based on reading the current code in the sqlite3-legacy branch, here are specific actions to ensure the branch implements pure legacy sqlite3 functionality:
+
+1. **In `clustering.py`**:
+   - Remove imports: `from sqlvector_utils import connect_vec_db, create_embeddings_table, serialize_float32_array, insert_embeddings_batch, build_vector_index`
+   - In `distance_matrix_db`: Replace vector DB connection with `conn = sqlite3.connect(embeddings_db)` and `conn.execute("PRAGMA ...")` for speed.
+   - Use `vec.numpy().tobytes()` for embedding storage in BLOB.
+   - Add back the O(N²) `torch.cdist` loop to populate `distances` table: `distances = torch.cdist(all_embeddings, all_embeddings)` and insert rows.
+   - Remove calls to `build_vector_index`.
+
+2. **In `evaluate_clusters.py`**:
+   - Ensure it imports `load_embeddings` and `load_distances` from `utils.py`.
+   - Remove any references to vector DB queries; keep sklearn KNN on full matrices.
+
+3. **In `cluster_visualization.py`**:
+   - Ensure it uses `load_embeddings` from `utils.py` for projections with `x,y` or `comp_*` columns.
+   - Remove any code loading from `vec_projections`.
+
+4. **In `main.py`**:
+   - Change `from project_refactor import project` to `from project import project` (assuming `project.py` exists; if not, adapt `cluster_visualization.py` to handle projections).
+
+5. **In `utils.py`**:
+   - Ensure `load_embeddings` handles BLOB deserialization correctly.
+   - Ensure `load_distances` builds the full distance matrix.
+
+6. **General**:
+   - Remove any conditional imports or try/except blocks for `sqlite_vec`.
+   - Ensure all DB operations use standard sqlite3 without extensions.
+
+These actions will restore the legacy BLOB-based workflow without vector dependencies.
 
 This cleanup results in a streamlined repository for the legacy sqlite3 workflow.

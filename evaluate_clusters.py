@@ -84,8 +84,10 @@ def already_computed(
         query = ""
     else:
         query = " AND " + "=? AND ".join(other_columns.keys()) + "=?"
-    for col, col_type in other_columns.items():
-        ensure_column_exists(c, "knn_results", col, col_type)
+    for col in other_columns.keys():
+        # other_columns maps column_name -> value; ensure the column exists
+        # but do not treat the value as an SQL type (would produce syntax errors).
+        ensure_column_exists(c, "knn_results", col)
 
     query = (
         "model=? AND k=? AND random_state=? AND num_folds=? AND cv_type=? AND distance_metric=?"
