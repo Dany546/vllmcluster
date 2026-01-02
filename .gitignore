@@ -27,3 +27,4 @@ wandb/
 *.pt
 dino/
 job.err job.out
+tmp_tsne_test.db
