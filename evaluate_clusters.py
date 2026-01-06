@@ -241,6 +241,16 @@ def decode(x):
     return np.array(x, dtype=int).ravel()
 
 
+def get_fold_indices(n_splits=10, random_state=42):
+    """
+    Generate and return deterministic fold indices for consistent cross-validation.
+    This ensures the same data splits are used across all runs.
+    """
+    indices = np.arange(5000)  # Fixed dataset size
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    return list(kf.split(indices))
+
+
 def work_fn(args):
     (
         distances,
@@ -253,11 +263,10 @@ def work_fn(args):
         distance_metric,
         n_components,
         target_name,
-        kf,
+        folds,
     ) = args
 
-    indices = np.arange(5000)
-    folds = list(kf.split(indices))
+    # folds are now pre-generated and passed directly
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     records = []
@@ -330,7 +339,8 @@ def process_table(args_list, results, table_path, table_name):
         "flag_supercat": supercats,
     }
     distances = load_distances(table_path.replace("embeddings", "distances"))
-    kf = KFold(n_splits=args_list[0][3], shuffle=True, random_state=args_list[0][2])
+    # Use pre-generated deterministic fold indices for consistency
+    folds = get_fold_indices(n_splits=args_list[0][3], random_state=42)
 
     new_args_list = []
     for args in args_list:
@@ -341,9 +351,9 @@ def process_table(args_list, results, table_path, table_name):
                 os.path.join(root, f"{args[0].split('.')[0].split('_')[1]}.db"),
                 args[-1],
             )[args[-1]].values
-            new_args = [other_targ] + new_args + [kf]
+            new_args = [other_targ] + new_args + [folds]
         else:
-            new_args = [targets[args[-1]]] + new_args + [kf]
+            new_args = [targets[args[-1]]] + new_args + [folds]
         if "." in args[0]:  # need embeddings from projections
             path = table_path.replace("embeddings", "proj")
             path = "/".join(path.split("/")[:-1])
@@ -488,6 +498,7 @@ def KNN(args):
     init_db()
 
     neighbor_grid = [5, 10, 15, 20, 30, 50]
+    # Use fixed random seed for determinism across all hyperparameter combinations
     RN = 42
     num_folds = 10
     distance_metric = "euclidean"

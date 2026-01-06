@@ -1,35 +1,26 @@
 wandb: Currently logged in as: dany404 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-wandb: setting up run y0wfjy4x
+wandb: setting up run t3fyftmz
 wandb: Tracking run with wandb version 0.23.1
-wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20260102_153534-y0wfjy4x
+wandb: Run data is saved locally in /auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20260105_105038-t3fyftmz
 wandb: Run `wandb offline` to turn off syncing.
 wandb: Syncing run knn
 wandb: ⭐️ View project at https://wandb.ai/miro-unet/VLLM%20clustering
-wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/y0wfjy4x
+wandb: 🚀 View run at https://wandb.ai/miro-unet/VLLM%20clustering/runs/t3fyftmz
 wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
 root - INFO - Computing 54 rows for table yolov8s-seg
 Traceback (most recent call last):
   File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 172, in <module>
     main(args)
   File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/main.py", line 130, in main
-    KNN_vec(args)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters_vec.py", line 156, in KNN_vec
+    KNN(args)
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 508, in KNN
     process_table(tasks[table_name], records, table, table_name)
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters_vec.py", line 96, in process_table
-    distances = load_distances(table_path.replace("embeddings", "distances"))
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/utils.py", line 127, in load_distances
-    i_idx = np.vectorize(id_to_idx.get)(rows[:, 0])
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py", line 2522, in __call__
-    return self._call_as_normal(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py", line 2515, in _call_as_normal
-    return self._vectorize_call(func=func, args=vargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py", line 2600, in _vectorize_call
-    ufunc, otypes = self._get_ufunc_and_otypes(func=func, args=args)
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/dino/lib/python3.11/site-packages/numpy/lib/_function_base_impl.py", line 2556, in _get_ufunc_and_otypes
-    raise ValueError('cannot call `vectorize` on size 0 inputs '
-ValueError: cannot call `vectorize` on size 0 inputs unless `otypes` is set
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 360, in process_table
+    results.extend(work_fn(args))
+                   ^^^^^^^^^^^^^
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 317, in work_fn
+    raise e
+  File "/auto/home/users/d/a/darimez/MIRO/vllmcluster/evaluate_clusters.py", line 274, in work_fn
+    D_train = distances[tr_idx][:, tr_idx]
+              ~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+IndexError: index 0 is out of bounds for axis 1 with size 0

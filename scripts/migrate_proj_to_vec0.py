@@ -11,7 +11,7 @@ This script will:
  - create vec tables in the destination and insert all rows for the given `run_id`
  - run repeated k-NN queries and time them (compare to linear fallback if vec0 not available)
 
-Make sure your venv has `apsw` installed or `VEC0_SO` env var points to a vec0 .so file.
+Make sure your venv has `apsw` and the `sqlite-vec` Python package installed. This script requires `sqlite-vec` to register vec0.
 """
 import argparse
 import os

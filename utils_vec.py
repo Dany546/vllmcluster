@@ -9,7 +9,6 @@ legacy branch and a sqlite-vector branch independently.
 """
 from typing import Optional
 import os
-import sqlite3
 import numpy as np
 
 from sqlvector_projector import (

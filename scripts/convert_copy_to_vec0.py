@@ -27,6 +27,9 @@ except Exception:
 
 def find_vecso():
     # prefer explicit env var
+    # prefer modern VECTOR_EXT_PATH but accept legacy VEC0_SO
+    if "VECTOR_EXT_PATH" in os.environ:
+        return os.environ.get("VECTOR_EXT_PATH")
     if "VEC0_SO" in os.environ:
         return os.environ.get("VEC0_SO")
     if sqlite_vec is not None:
@@ -48,7 +51,7 @@ def create_and_populate(db_path: str, run_id: str):
 
     vecso = find_vecso()
     if vecso is None:
-        print("Warning: could not locate vec0.so; set VEC0_SO to the shared lib path")
+        print("Warning: could not locate vec0.so via sqlite-vec installation; ensure the `sqlite-vec` Python package is installed in this environment.")
 
     # fetch a sample blob to infer dim using sqlite3 (safe read)
     sconn = sqlite3.connect(db_path)
@@ -62,14 +65,17 @@ def create_and_populate(db_path: str, run_id: str):
     dim = get_dim_from_blob(sample_blob)
     sconn.close()
 
-    # use APSW connection to load vec0 and create virtual table
+    # use APSW connection to create virtual table; sqlite-vec must be installed in the environment
     aconn = apsw.Connection(db_path)
-    if vecso is not None and os.path.exists(vecso):
+    try:
+        import sqlite_vec
         try:
-            aconn.loadextension(vecso)
-            print('Loaded vec0 from', vecso)
+            sqlite_vec.load(aconn)
+            print('Registered vec0 via sqlite-vec')
         except Exception as e:
-            print('Failed to load vec0:', e)
+            print('Failed to register vec0 via sqlite-vec:', e)
+    except Exception:
+        print('sqlite-vec package not importable in this environment; ensure it is installed')
 
     cur = aconn.cursor()
 

@@ -1,6 +1,7 @@
 Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolov8s-seg.db
 5000
-Number of nodes: 0
+Distance table empty: returning (0,0) matrix
+Error processing table yolov8s-seg: index 0 is out of bounds for axis 1 with size 0
 [1;34mwandb[0m: 
-[1;34mwandb[0m: 🚀 View run [33mknn[0m at: [34mhttps://wandb.ai/miro-unet/VLLM%20clustering/runs/y0wfjy4x[0m
-[1;34mwandb[0m: Find logs at: [1;35m../../../../../../auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20260102_153534-y0wfjy4x/logs[0m
+[1;34mwandb[0m: 🚀 View run [33mknn[0m at: [34mhttps://wandb.ai/miro-unet/VLLM%20clustering/runs/t3fyftmz[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../../../../../auto/home/users/d/a/darimez/MIRO/vllmcluster/wandb/run-20260105_105038-t3fyftmz/logs[0m

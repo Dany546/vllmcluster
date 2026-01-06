@@ -1,7 +1,8 @@
 # project_refactor.py
 import os
 import itertools
-import sqlite3
+import json
+import concurrent.futures
 from sqlvector_projector import (
     connect_vec_db,
     create_vec_tables,
@@ -17,6 +18,21 @@ from utils import get_logger, load_embeddings, get_lookups
 EMBEDDINGS_DIR = "/globalscratch/ucl/irec/darimez/dino/embeddings/"
 PROJ_DB_DIR = "/globalscratch/ucl/irec/darimez/dino/proj/"
 METRICS_DB = os.path.join(PROJ_DB_DIR, "metrics.db")
+# Parallel execution configuration
+USE_PARALLEL = True  # Set to False to disable parallel execution for debugging
+MAX_WORKERS = 32   # None for auto-detect, or specify maximum number of workers
+
+
+def compute_projection_task(task, X, model_name, args):
+    """Helper function to compute a single projection task"""
+    # Initialize logger for this worker process
+    logger = get_logger(args.debug)
+    algo = task["algo"]
+    params = {k: v for k, v in task.items() if k != "algo"}
+    logger.info(f"Computing {algo} projection for model {model_name} with params {params}")
+    # compute_and_store will create vec tables and metadata and insert projections
+    return compute_and_store(X, model_name, params, db_path=PROJ_DB_DIR, algo=algo)
+
 
 def expand_params(param_dict, algo):
     keys = list(param_dict.keys())
@@ -29,7 +45,7 @@ def run_exists_in_db(run_id: str, algo: str) -> bool:
     db_file = os.path.join(PROJ_DB_DIR, f"{algo}.db")
     if not os.path.exists(db_file):
         return False
-    conn = sqlite3.connect(db_file)
+    conn = connect_vec_db(db_file)
     cur = conn.cursor()
     try:
         cur.execute("SELECT 1 FROM metadata WHERE run_id=?", (run_id,))
@@ -43,7 +59,7 @@ def embeddings_count_for_run(run_id: str, algo: str) -> int:
     db_file = os.path.join(PROJ_DB_DIR, f"{algo}.db")
     if not os.path.exists(db_file):
         return 0
-    conn = sqlite3.connect(db_file)
+    conn = connect_vec_db(db_file)
     cur = conn.cursor()
     try:
         cur.execute("SELECT COUNT(*) FROM vec_projections WHERE run_id=?", (run_id,))
@@ -61,17 +77,17 @@ def embeddings_count_for_run(run_id: str, algo: str) -> int:
 def project(args):
     logger = get_logger(args.debug)
 
-    # hyperparameter grids (same as original)
+    # hyperparameter grids (same as original) 
     umap_params = {
-        "n_neighbors": [15, 30, 60],
+        "n_neighbors": [10, 20, 40, 60],
         "min_dist": [0.02, 0.1, 0.5],
-        "n_components": [2, 10, 50],
+        "n_components": [2, 10, 25],
     }
     tsne_params = {
-        "n_components": [2, 10, 50],
+        "n_components": [2, 10, 25],
         "perplexity": [10, 30, 50],
-        "early_exaggeration": [8, 12, 16],
-        "learning_rate": [100, 200, 500],
+        "early_exaggeration": [8, 16],
+        "learning_rate": [100, 300],
         "max_iter": [1000],
     }
 
@@ -82,25 +98,24 @@ def project(args):
         dbfile = os.path.join(PROJ_DB_DIR, dbname)
         if not os.path.exists(dbfile):
             continue
-        conn = sqlite3.connect(dbfile)
+        conn = connect_vec_db(dbfile)
         c = conn.cursor()
         try:
             c.execute("""DELETE FROM metadata WHERE run_id NOT IN (SELECT DISTINCT run_id FROM vec_projections);""")
         except Exception:
             # ignore if vec_projections doesn't exist
             pass
-        conn.commit()
         conn.close()
 
     # iterate over embedding files (one file per model)
     tables = [os.path.join(EMBEDDINGS_DIR, f) for f in os.listdir(EMBEDDINGS_DIR) if f.endswith(".db")]
-    for table in tables:
+    for table in [tables[5]]:
         model_name = os.path.basename(table).split(".")[0]
         logger.debug(f"Processing {model_name}")
 
         # 1) compute and store metrics if missing
         # check metrics DB for this model
-        conn = sqlite3.connect(METRICS_DB)
+        conn = connect_vec_db(METRICS_DB)
         cur = conn.cursor()
         try:
             cur.execute("SELECT COUNT(*) FROM vec_metrics WHERE model=?", (model_name,))
@@ -133,11 +148,57 @@ def project(args):
         # 3) compute projections for each missing task
         # load embeddings once per model and reuse
         ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
-        for task in tasks:
-            algo = task["algo"]
-            params = {k: v for k, v in task.items() if k != "algo"}
-            logger.info(f"Computing {algo} projection for model {model_name} with params {params}")
-            # compute_and_store will create vec tables and metadata and insert projections
-            compute_and_store(X, model_name, params, db_path=PROJ_DB_DIR, algo=algo)
+        
+        # Determine number of workers based on configuration
+        import multiprocessing
+        num_workers = MAX_WORKERS
+        
+        # Ensure tasks are processed in deterministic order by sorting them
+        # This ensures reproducibility across runs
+        tasks_sorted = sorted(tasks, key=lambda x: (x["algo"], json.dumps(x, sort_keys=True)))
+        
+        logger.info(f"USE_PARALLEL: {USE_PARALLEL}, num_workers: {num_workers}, len(tasks_sorted): {len(tasks_sorted)}")
+        if USE_PARALLEL and num_workers > 1 and len(tasks_sorted) > 1:
+            logger.info(f"Using parallel execution with {num_workers} workers")
+            
+            # Add memory monitoring and limit batch size for parallel processing
+            import psutil
+            import gc
+            import time
+            import random
+            
+            logger.info(f"Creating ProcessPoolExecutor with max_workers={num_workers}")
+            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+                # Create a partial function with fixed arguments
+                from functools import partial
+                task_func = partial(compute_projection_task, X=X, model_name=model_name, args=args) 
+                  
+                future_to_task = {executor.submit(task_func, task): task for task in tasks_sorted}
+                
+                # Process results and clean up memory
+                for future in concurrent.futures.as_completed(future_to_task):
+                    task = future_to_task[future]
+                    try:
+                        result = future.result()
+                        logger.debug(f"Completed projection task: {result}")
+                    except Exception as e:
+                        logger.error(f"Error computing projection for task {task}: {e}")
+                        # Add retry logic for database locks
+                        if "database is locked" in str(e):
+                            max_retries = 5
+                            for retry in range(max_retries):
+                                try:
+                                    # logger.info(f"Retrying task {task} (attempt {retry + 1}/{max_retries})")
+                                    time.sleep(random.uniform(0.5, 2.0))  # Random delay before retry
+                                    result = compute_projection_task(task, X, model_name, args)
+                                    logger.info(f"Completed projection task on retry: {result}")
+                                    break
+                                except Exception as retry_error:
+                                    if retry == max_retries - 1:
+                                        logger.error(f"Failed after {max_retries} retries for task {task}: {retry_error}")
+                                    continue
+                    
+                    # Clean up memory after each task
+                    gc.collect()
 
     logger.info("Projection pipeline finished.")

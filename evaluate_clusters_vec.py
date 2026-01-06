@@ -94,7 +94,9 @@ def process_table(args_list, results, table_path, table_name):
         "flag_supercat": supercats,
     }
     distances = load_distances(table_path.replace("embeddings", "distances"))
-    kf = KFold(n_splits=args_list[0][3], shuffle=True, random_state=args_list[0][2])
+    # Use pre-generated deterministic fold indices for consistency
+    from evaluate_clusters import get_fold_indices
+    folds = get_fold_indices(n_splits=args_list[0][3], random_state=42)
 
     new_args_list = []
     for args in args_list:
@@ -104,9 +106,9 @@ def process_table(args_list, results, table_path, table_name):
             root = os.path.dirname(table_path)
             other_model = args[0].split('.')[0].split('_')[1]
             other_targ = load_embeddings(os.path.join(root, f"{other_model}.db"), args[-1])[args[-1]].values
-            new_args = [other_targ] + new_args + [kf]
+            new_args = [other_targ] + new_args + [folds]
         else:
-            new_args = [targets[args[-1]]] + new_args + [kf]
+            new_args = [targets[args[-1]]] + new_args + [folds]
 
         if "." in args[0]:
             # projection-based task: load vectors from proj DB using utils_vec
@@ -141,6 +143,7 @@ def KNN_vec(args):
     init_db()
 
     neighbor_grid = [5, 10, 15, 20, 30, 50]
+    # Use fixed random seed for determinism across all hyperparameter combinations
     RN = 42
     num_folds = 10
     distance_metric = "euclidean"

@@ -1,47 +1,61 @@
 # sqlvector_utils.py
-import sqlite3
 import numpy as np
 from typing import List, Tuple, Any, Optional
 import os
 
-# Optional helper package that registers vec0 and helper functions
 try:
-    import sqlite_vec
+    import apsw
 except Exception:
-    sqlite_vec = None
+    apsw = None
 
-VECTOR_EXT_PATH = os.getenv("VECTOR_EXT_PATH", None)
+# Type alias for connection to work with both APSW and sqlite3
+Connection = Any
 
-def connect_vec_db(db_path: str) -> sqlite3.Connection:
-    """Connect to SQLite and try to load sqlite-vec if available."""
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA temp_store=MEMORY")
-    conn.execute("PRAGMA cache_size=-20000")
-    # Try to register sqlite-vec via its Python loader if available
-    if sqlite_vec is not None:
+def connect_vec_db(db_path: str, require_vec0: bool = False) -> Connection:
+    """Connect to SQLite using APSW and load sqlite-vec extension if available.
+
+    If `require_vec0` is True this function raises if vec0 can't be loaded.
+    """
+    if apsw is None:
+        raise RuntimeError('APSW is required. Install via `pip install apsw`')
+    
+    # Use APSW as the primary method for extension loading
+    try:
+        aconn = apsw.Connection(db_path)
+        
+        # Set PRAGMA settings for performance
         try:
-            sqlite_vec.load(conn)
-            # verify extension loaded (vec_version returns a single value)
-            conn.execute("SELECT vec_version()").fetchone()
+            aconn.execute("PRAGMA journal_mode=WAL")
+            aconn.execute("PRAGMA synchronous=NORMAL")
+            aconn.execute("PRAGMA temp_store=MEMORY")
         except Exception:
-            # If load fails, continue; functions will fall back to linear scan
             pass
-    else:
-        # If sqlite_vec not installed but VECTOR_EXT_PATH points to a library, try to load it
-        if VECTOR_EXT_PATH and os.path.exists(VECTOR_EXT_PATH):
+        
+        # Try to load vec0 extension if available
+        vecpath = os.environ.get("VECTOR_EXT_PATH") or os.environ.get("VEC0_SO")
+        if vecpath and os.path.exists(vecpath):
             try:
-                conn.enable_load_extension(True)
-                conn.load_extension(VECTOR_EXT_PATH)
-                conn.enable_load_extension(False)
-                conn.execute("SELECT vec_version()").fetchone()
-            except Exception:
-                # ignore and fall back
-                pass
-    return conn
+                aconn.loadextension(vecpath)
+                # Verify vec0 is loaded
+                try:
+                    aconn.execute("SELECT vec_version()")
+                    return aconn
+                except Exception:
+                    # vec0 extension loaded but vec_version() not available
+                    return aconn
+            except Exception as e:
+                if require_vec0:
+                    raise RuntimeError(f"Failed to load vec0 extension via APSW: {e}")
+                # Continue without vec0 if not required
+                return aconn
+        elif require_vec0:
+            raise RuntimeError('vec0 shared library not found; set VECTOR_EXT_PATH or VEC0_SO to the vec0 .so path')
+        
+        return aconn
+    except Exception as e:
+        raise RuntimeError(f"Failed to connect via APSW: {e}")
 
-def create_embeddings_table(conn: sqlite3.Connection, dim: int, is_seg: bool = False):
+def create_embeddings_table(conn: Connection, dim: int, is_seg: bool = False):
     """Create embeddings and metadata tables."""
     cur = conn.cursor()
     if is_seg:
@@ -109,37 +123,35 @@ def create_embeddings_table(conn: sqlite3.Connection, dim: int, is_seg: bool = F
     cur.execute("CREATE INDEX IF NOT EXISTS idx_img_id ON embeddings(img_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_flag_cat ON embeddings(flag_cat)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_flag_supercat ON embeddings(flag_supercat)")
-    conn.commit()
+    # Commit for both sqlite3 and APSW connections
+    try:
+        conn.commit()
+    except Exception:
+        try:
+            conn.execute('COMMIT')
+        except Exception:
+            pass
 
 def serialize_float32_array(arr: np.ndarray) -> bytes:
     """Serialize numpy float32 array to bytes compatible with vec0 BLOB format."""
     if arr.dtype != np.float32:
         arr = arr.astype(np.float32)
-    # prefer sqlite_vec helper if present
-    if sqlite_vec is not None and hasattr(sqlite_vec, "serialize_float32"):
-        try:
-            # sqlite_vec.serialize_float32 expects a Python list or similar
-            return sqlite_vec.serialize_float32(arr.tolist())
-        except Exception:
-            pass
+    # Use numpy's tobytes() method for serialization
     return arr.tobytes()
 
 def deserialize_float32_array(blob: bytes, dim: int) -> np.ndarray:
     """Deserialize bytes back to numpy float32 array."""
-    if sqlite_vec is not None and hasattr(sqlite_vec, "deserialize_float32"):
-        try:
-            arr = np.array(sqlite_vec.deserialize_float32(blob), dtype=np.float32)
-            if arr.size != dim:
-                raise ValueError(f"Expected {dim} dimensions, got {arr.size}")
-            return arr
-        except Exception:
-            pass
-    arr = np.frombuffer(blob, dtype=np.float32)
+    # Accept either a numpy array (if the connection returned one) or raw bytes
+    if isinstance(blob, (bytes, bytearray, memoryview)):
+        arr = np.frombuffer(blob, dtype=np.float32)
+    else:
+        # assume DB returned an array-like object
+        arr = np.array(blob, dtype=np.float32)
     if arr.size != dim:
         raise ValueError(f"Expected {dim} dimensions, got {arr.size}")
     return arr
 
-def insert_embeddings_batch(conn: sqlite3.Connection, rows: List[Tuple[Any, ...]]):
+def insert_embeddings_batch(conn: Connection, rows: List[Tuple[Any, ...]]):
     """Insert or replace a batch of rows into embeddings table."""
     if not rows:
         return
@@ -147,9 +159,16 @@ def insert_embeddings_batch(conn: sqlite3.Connection, rows: List[Tuple[Any, ...]
     ncols = len(rows[0])
     placeholders = ",".join(["?"] * ncols)
     cur.executemany(f"INSERT OR REPLACE INTO embeddings VALUES ({placeholders})", rows)
-    conn.commit()
+    # Commit for both sqlite3 and APSW connections
+    try:
+        conn.commit()
+    except Exception:
+        try:
+            conn.execute('COMMIT')
+        except Exception:
+            pass
 
-def build_vector_index(conn: sqlite3.Connection, table: str = "embeddings", column: str = "embedding", metric: str = "l2"):
+def build_vector_index(conn: Connection, table: str = "embeddings", column: str = "embedding", metric: str = "l2"):
     """Create vec0 virtual table and populate it. Falls back silently if vec0 unavailable."""
     cur = conn.cursor()
     # read dimension from metadata
@@ -161,13 +180,20 @@ def build_vector_index(conn: sqlite3.Connection, table: str = "embeddings", colu
         cur.execute(f"DROP TABLE IF EXISTS vec_{table}")
         cur.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_{table} USING vec0(id UNINDEXED, embedding FLOAT[{dim}] distance_metric={metric})")
         cur.execute(f"INSERT INTO vec_{table} (id, embedding) SELECT id, {column} FROM {table}")
-        conn.commit()
-    except sqlite3.OperationalError:
+        # Commit for both sqlite3 and APSW connections
+        try:
+            conn.commit()
+        except Exception:
+            try:
+                conn.execute('COMMIT')
+            except Exception:
+                pass
+    except Exception:
         # vec0 not available; leave as-is and rely on linear scan
         pass
 
 def query_knn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     query_vec: np.ndarray,
     k: int = 10,
     table: str = "embeddings",
@@ -205,12 +231,12 @@ def query_knn(
         if not return_distances:
             rows = [r[:-1] for r in rows]
         return rows
-    except sqlite3.OperationalError:
+    except Exception:
         # fallback to linear scan
         return query_knn_linear(conn, query_vec, k, table, return_distances, filter_clause, filter_params)
 
 def query_knn_linear(
-    conn: sqlite3.Connection,
+    conn: Connection,
     query_vec: np.ndarray,
     k: int = 10,
     table: str = "embeddings",
@@ -243,7 +269,7 @@ def query_knn_linear(
             results.append((*row[:2], *row[3:]))
     return results
 
-def get_embedding_by_id(conn: sqlite3.Connection, emb_id: int) -> Optional[np.ndarray]:
+def get_embedding_by_id(conn: Connection, emb_id: int) -> Optional[np.ndarray]:
     """Retrieve embedding vector by ID. Returns numpy float32 array or None."""
     cur = conn.cursor()
     cur.execute("SELECT embedding FROM embeddings WHERE id = ?", (emb_id,))
@@ -253,7 +279,7 @@ def get_embedding_by_id(conn: sqlite3.Connection, emb_id: int) -> Optional[np.nd
     dim = int(cur.execute("SELECT value FROM metadata WHERE key = 'dimension'").fetchone()[0])
     return deserialize_float32_array(row[0], dim)
 
-def get_all_embeddings(conn: sqlite3.Connection) -> Tuple[np.ndarray, List[int]]:
+def get_all_embeddings(conn: Connection) -> Tuple[np.ndarray, List[int]]:
     """Return (embeddings_array, ids). embeddings_array shape is (N, dim)."""
     cur = conn.cursor()
     cur.execute("SELECT id, embedding FROM embeddings ORDER BY id")

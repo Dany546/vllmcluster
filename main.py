@@ -125,9 +125,9 @@ def main(args):
         # visualize_clusters(args)
         project(args)
     elif args.knn:
-        from evaluate_clusters_vec import KNN_vec
+        from evaluate_clusters import KNN
 
-        KNN_vec(args)
+        KNN(args)
     else:
         cluster(args)
 

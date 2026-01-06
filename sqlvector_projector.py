@@ -3,99 +3,79 @@ import os
 import json
 import hashlib
 import itertools
-import sqlite3
 from typing import List, Tuple, Any, Optional
 
 import numpy as np
 from sklearn.manifold import TSNE
 from umap import UMAP
 
-# Optional helper package that registers vec0 and helpers
-try:
-    import sqlite_vec
-except Exception:
-    sqlite_vec = None
+# Use APSW as the primary method
 try:
     import apsw
 except Exception:
     apsw = None
 
+# Type alias for connection to work with both APSW and sqlite3
+Connection = Any
+
 # ---------- Helpers ----------
-def connect_vec_db(db_path: str) -> sqlite3.Connection:
-    # Prefer APSW connection if available because some system builds of
-    # the CPython `sqlite3` module disable extension loading. APSW lets
-    # us load the vec0 shared lib from user-space without admin rights.
-    if apsw is not None:
-        try:
-            aconn = apsw.Connection(db_path)
-            # attempt to find vec0 shared object near sqlite_vec, or use
-            # environment override VEC0_SO if set by the user.
-            vecso = None
-            try:
-                if "VEC0_SO" in os.environ:
-                    vecso = os.environ.get("VEC0_SO")
-                elif sqlite_vec is not None:
-                    base = os.path.dirname(getattr(sqlite_vec, "__file__", ""))
-                    cand = os.path.join(base, "vec0.so")
-                    if os.path.exists(cand):
-                        vecso = cand
-            except Exception:
-                vecso = None
+def connect_vec_db(db_path: str, require_vec0: bool = False) -> Connection:
+    """Connect to SQLite using APSW and load sqlite-vec extension if available.
 
-            if vecso is not None and os.path.exists(vecso):
+    If `require_vec0` is True this function raises if vec0 can't be loaded.
+    """
+    if apsw is None:
+        raise RuntimeError('APSW is required. Install via `pip install apsw`')
+    
+    # Use APSW as the primary method for extension loading
+    try:
+        aconn = apsw.Connection(db_path)
+        
+        # Set PRAGMA settings for performance
+        try:
+            aconn.execute("PRAGMA journal_mode=WAL")
+            aconn.execute("PRAGMA synchronous=NORMAL")
+            aconn.execute("PRAGMA temp_store=MEMORY")
+            aconn.execute("PRAGMA cache_size=-20000")
+        except Exception:
+            pass
+        
+        # Try to load vec0 extension if available
+        vecpath = os.environ.get("VECTOR_EXT_PATH") or os.environ.get("VEC0_SO")
+        if vecpath and os.path.exists(vecpath):
+            try:
+                aconn.loadextension(vecpath)
+                # Verify vec0 is loaded
                 try:
-                    aconn.loadextension(vecso)
+                    aconn.execute("SELECT vec_version()")
+                    return aconn
                 except Exception:
-                    pass
-            # set pragmas via an explicit execute call to keep API similar
-            try:
-                aconn.execute("PRAGMA journal_mode=WAL")
-                aconn.execute("PRAGMA synchronous=NORMAL")
-                aconn.execute("PRAGMA temp_store=MEMORY")
-            except Exception:
-                pass
-            return aconn
-        except Exception:
-            # fall back to builtin sqlite3 if APSW cannot be used
-            pass
-
-    # Fallback to stdlib sqlite3 connection
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA temp_store=MEMORY")
-    conn.execute("PRAGMA cache_size=-20000")
-
-    # Try to register sqlite-vec via its Python loader if available.
-    if sqlite_vec is not None:
-        try:
-            sqlite_vec.load(conn)
-            conn.execute("SELECT vec_version()").fetchone()
-        except Exception:
-            # ignore and return the sqlite3 connection (vec0 may not be available)
-            pass
-    return conn
+                    # vec0 extension loaded but vec_version() not available
+                    return aconn
+            except Exception as e:
+                if require_vec0:
+                    raise RuntimeError(f"Failed to load vec0 extension via APSW: {e}")
+                # Continue without vec0 if not required
+                return aconn
+        elif require_vec0:
+            raise RuntimeError('vec0 shared library not found; set VECTOR_EXT_PATH or VEC0_SO to the vec0 .so path')
+        
+        return aconn
+    except Exception as e:
+        raise RuntimeError(f"Failed to connect via APSW: {e}")
 
 def serialize_float32_array(arr: np.ndarray) -> bytes:
     if arr.dtype != np.float32:
         arr = arr.astype(np.float32)
-    if sqlite_vec is not None and hasattr(sqlite_vec, "serialize_float32"):
-        try:
-            return sqlite_vec.serialize_float32(arr.tolist())
-        except Exception:
-            pass
+    # Use numpy's tobytes() method for serialization
     return arr.tobytes()
 
 def deserialize_float32_array(blob: bytes, dim: int) -> np.ndarray:
-    if sqlite_vec is not None and hasattr(sqlite_vec, "deserialize_float32"):
-        try:
-            arr = np.array(sqlite_vec.deserialize_float32(blob), dtype=np.float32)
-            if arr.size != dim:
-                raise ValueError(f"Expected {dim} dims, got {arr.size}")
-            return arr
-        except Exception:
-            pass
-    arr = np.frombuffer(blob, dtype=np.float32)
+    # Accept bytes or array-like objects (sqlite-vec may return arrays)
+    if isinstance(blob, (bytes, bytearray, memoryview)):
+        arr = np.frombuffer(blob, dtype=np.float32)
+    else:
+        arr = np.array(blob, dtype=np.float32)
     if arr.size != dim:
         raise ValueError(f"Expected {dim} dims, got {arr.size}")
     return arr
@@ -108,7 +88,7 @@ def compute_run_id(model: str, hyperparams: dict) -> str:
     return f"{model}_{run_hash}"
 
 # ---------- Schema creation ----------
-def create_vec_tables(conn: sqlite3.Connection, proj_dim: int, metrics_dim: int):
+def create_vec_tables(conn: Connection, proj_dim: int, metrics_dim: int):
     """
     Create vec0 virtual tables for projections and metrics.
     Keep a small metadata table for run-level human-readable info.
@@ -128,8 +108,8 @@ def create_vec_tables(conn: sqlite3.Connection, proj_dim: int, metrics_dim: int)
     # embedding dimension = proj_dim
     try:
         cur.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_projections USING vec0(id UNINDEXED, run_id UNINDEXED, model UNINDEXED, mean_conf, embedding FLOAT[{proj_dim}])")
-    except sqlite3.OperationalError:
-        # vec0 not available; create a fallback table with BLOB
+    except Exception:
+        # vec0 not available or vec0 constructor incompatible; create a fallback table with BLOB
         cur.execute("""
             CREATE TABLE IF NOT EXISTS vec_projections (
                 id INTEGER,
@@ -144,7 +124,7 @@ def create_vec_tables(conn: sqlite3.Connection, proj_dim: int, metrics_dim: int)
     # vec_metrics: store per-image metric vectors (hit_freq, mean_iou, mean_conf, cat counts..., supercat counts...)
     try:
         cur.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_metrics USING vec0(img_id UNINDEXED, model UNINDEXED, embedding FLOAT[{metrics_dim}])")
-    except sqlite3.OperationalError:
+    except Exception:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS vec_metrics (
                 img_id INTEGER,
@@ -154,10 +134,17 @@ def create_vec_tables(conn: sqlite3.Connection, proj_dim: int, metrics_dim: int)
             )
         """)
 
-    conn.commit()
+    # Commit for both sqlite3 and APSW connections
+    try:
+        conn.commit()
+    except Exception:
+        try:
+            conn.execute('COMMIT')
+        except Exception:
+            pass
 
 # ---------- Insert / store projections ----------
-def insert_projection_batch(conn: sqlite3.Connection, rows: List[Tuple[Any, ...]], proj_dim: int):
+def insert_projection_batch(conn: Connection, rows: List[Tuple[Any, ...]], proj_dim: int):
     """
     rows: list of tuples (id, run_id, model, mean_conf, embedding_numpy_array)
     If vec0 is available we insert serialized float32 into vec_projections.embedding.
@@ -167,7 +154,7 @@ def insert_projection_batch(conn: sqlite3.Connection, rows: List[Tuple[Any, ...]
     # Detect whether vec_projections is virtual or fallback by checking schema
     cur.execute("PRAGMA table_info(vec_projections)")
     cols = [r[1] for r in cur.fetchall()]
-    is_virtual = 'embedding' in cols and any(c.lower() == 'embedding' for c in cols) and sqlite_vec is not None
+    is_virtual = 'embedding' in cols and any(c.lower() == 'embedding' for c in cols)
 
     if is_virtual:
         # Insert serialized bytes directly; vec0 will accept the BLOB format
@@ -182,7 +169,14 @@ def insert_projection_batch(conn: sqlite3.Connection, rows: List[Tuple[Any, ...]
             prepared.append((int(id_), run_id, model, float(mean_conf), serialize_float32_array(emb)))
         cur.executemany("INSERT OR REPLACE INTO vec_projections(id, run_id, model, mean_conf, embedding) VALUES (?, ?, ?, ?, ?)", prepared)
 
-    conn.commit()
+    # Commit for both sqlite3 and APSW connections
+    try:
+        conn.commit()
+    except Exception:
+        try:
+            conn.execute('COMMIT')
+        except Exception:
+            pass
 
 def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     assert algo in ["tsne", "umap"], "Unknown algorithm"
@@ -192,7 +186,11 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     if algo == "tsne":
         projector = TSNE(**hyperparams, random_state=42, method="exact")
     else:
-        projector = UMAP(**hyperparams, random_state=42)
+        # For UMAP, explicitly set n_jobs=1 to avoid the warning about it being overridden
+        # when random_state is set. This is the expected behavior.
+        umap_params = hyperparams.copy()
+        umap_params.setdefault('n_jobs', 1)  # Set default if not provided
+        projector = UMAP(**umap_params, random_state=42)
 
     embedding = projector.fit_transform(X).astype(np.float32)
 
@@ -207,7 +205,13 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     # store run metadata
     cur = conn.cursor()
     cur.execute("INSERT OR REPLACE INTO metadata(run_id, model, params) VALUES (?, ?, ?)", (run_id, model_name, json.dumps(hyperparams)))
-    conn.commit()
+    try:
+        conn.commit()
+    except Exception:
+        try:
+            conn.execute('COMMIT')
+        except Exception:
+            pass
 
     # insert embeddings in batches
     batch = []
@@ -226,7 +230,9 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
 # ---------- Load vectors ----------
 def load_vectors_from_db(db_path, algo, run_id, ids=None) -> np.ndarray:
     db_file = os.path.join(db_path, f"{algo}.db")
-    conn = connect_vec_db(db_file)
+    # Require vec0 for loading projection vectors to ensure vec_projections
+    # is available and queries use the vec0 virtual table.
+    conn = connect_vec_db(db_file, require_vec0=True)
     cur = conn.cursor()
 
     # Try to read from vec_projections; if virtual table exists we can select embedding directly
@@ -308,18 +314,31 @@ def compute_and_store_metrics(model_name, data, db_path=""):
         if len(rows) >= 128:
             cur.executemany("INSERT OR REPLACE INTO vec_metrics(img_id, model, embedding) VALUES (?, ?, ?)", rows)
             rows = []
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                try:
+                    conn.execute('COMMIT')
+                except Exception:
+                    pass
 
     if rows:
         cur.executemany("INSERT OR REPLACE INTO vec_metrics(img_id, model, embedding) VALUES (?, ?, ?)", rows)
-        conn.commit()
+        try:
+            conn.commit()
+        except Exception:
+            try:
+                conn.execute('COMMIT')
+            except Exception:
+                pass
 
     conn.close()
 
 # ---------- kNN query example using vec0 ----------
 def knn_query_projections(db_path, algo, query_vec: np.ndarray, k: int = 10, run_id: Optional[str] = None, min_conf: Optional[float] = None):
     db_file = os.path.join(db_path, f"{algo}.db")
-    conn = connect_vec_db(db_file)
+    # Require vec0 for kNN queries; fail fast if vec0 is not available.
+    conn = connect_vec_db(db_file, require_vec0=True)
     cur = conn.cursor()
     qblob = serialize_float32_array(query_vec.astype(np.float32))
 
@@ -344,7 +363,7 @@ def knn_query_projections(db_path, algo, query_vec: np.ndarray, k: int = 10, run
     try:
         cur.execute(sql, tuple(params))
         rows = cur.fetchall()
-    except sqlite3.OperationalError:
+    except Exception:
         # vec0 not available: fallback to linear scan
         # read all matching rows and compute distances in Python
         if run_id is None:

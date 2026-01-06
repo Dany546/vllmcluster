@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sqlite3
+import multiprocessing
 from collections import defaultdict
 from typing import Optional
 
@@ -52,13 +53,24 @@ def dict_to_filename(d):
 
 
 def get_logger(debug):
-    logger = logging.getLogger()
+    # Get process ID for multiprocessing logging
+    process_id = multiprocessing.current_process().pid
+    
+    # Create a logger with process-specific name to avoid conflicts
+    logger = logging.getLogger(f"process_{process_id}")
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+    
+    # Clear any existing handlers to avoid duplicate logs
+    logger.handlers.clear()
+    
+    # Create a new handler for this process
+    handler = logging.StreamHandler()
+    
+    # Include process ID in the log format to distinguish between processes
+    formatter = logging.Formatter(f"PID {process_id} - %(name)s - %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    
     return logger
 
 
@@ -115,6 +127,11 @@ def load_distances(db_path):
     df = pd.read_sql_query("SELECT i, j, distance FROM distances ORDER BY i, j", conn)
     conn.close()
     rows = df[["i", "j", "distance"]].values  # or cursor.fetchall() if you prefer
+    if rows.size == 0:
+        # No distances in table -> return empty matrix
+        print("Distance table empty: returning (0,0) matrix")
+        return np.zeros((0, 0), dtype=float)
+
     rows = rows[np.lexsort((rows[:, 1], rows[:, 0]))]
 
     # Map original IDs to 0..n-1
@@ -123,10 +140,12 @@ def load_distances(db_path):
     n = len(unique_ids)
     print(f"Number of nodes: {n}")
     dist_matrix = np.zeros((n, n), dtype=float)
-    # Vectorized remapping
-    i_idx = np.vectorize(id_to_idx.get)(rows[:, 0])
-    j_idx = np.vectorize(id_to_idx.get)(rows[:, 1])
-    d_vals = rows[:, 2]
+
+    # Safe remapping without relying on np.vectorize (fails on size 0 inputs)
+    i_idx = np.array([id_to_idx.get(x) for x in rows[:, 0]], dtype=int)
+    j_idx = np.array([id_to_idx.get(x) for x in rows[:, 1]], dtype=int)
+    d_vals = rows[:, 2].astype(float)
+
     dist_matrix[i_idx, j_idx] = d_vals
     dist_matrix[j_idx, i_idx] = d_vals
     return dist_matrix

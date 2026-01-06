@@ -1,11 +1,11 @@
 #!/bin/bash
 
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=2G
+#SBATCH --cpus-per-task=32
+#SBATCH --mem-per-cpu=1G
 #SBATCH --job-name=dino
-#SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.out
-#SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.err
+#SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job5.out
+#SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job5.err
 
 module load releases/2023b
 module load Python/3.11.5-GCCcore-13.2.0
@@ -21,8 +21,8 @@ cd ~/MIRO/vllmcluster
 # trap cleanup SIGINT SIGTERM EXIT
 
 # cd $GLOBALSCRATCH/dino
-# rm -rf embeddings/*
-# rm -rf distances/*
+# rm -rf embeddings/*vec*
+# rm -rf distances/*vec*
 # rm -rf proj/*
 # cd ~/MIRO/vllmcluster
 
@@ -31,8 +31,8 @@ source dino/bin/activate
 # python test_sqlvector_refactor.py
 # pytest -q test_cocodataset_augmentation_integration.py -s
 # python main.py --model="dino,dino_attention,dinov3,dinov3_attention,clip" 
-# python main.py --visu
-python main.py --knn
+python main.py --visu
+# python main.py --knn
 
 # cleanup
 
