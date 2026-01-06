@@ -303,16 +303,23 @@ def project(args):
     all_hyperparams = list(expand_params(umap_params, "umap")) + list(
         expand_params(tsne_params, "tsne")
     )
-    # deletes failed entries from embeddings
+    # Clean up failed/incomplete entries
+    # Delete metadata where run_id has no embeddings OR incomplete embeddings (< 5000)
     for db in ["tsne.db", "umap.db"]:
         conn = sqlite3.connect(
             os.path.join("/globalscratch/ucl/irec/darimez/dino/proj/", db)
         )
         c = conn.cursor()
         try:
-            c.execute(
-                """ DELETE FROM metadata WHERE run_id NOT IN ( SELECT DISTINCT run_id FROM embeddings ); """
-            )
+            c.execute("""
+                DELETE FROM metadata 
+                WHERE run_id NOT IN (SELECT DISTINCT run_id FROM embeddings)
+                OR run_id IN (
+                    SELECT run_id FROM embeddings 
+                    GROUP BY run_id 
+                    HAVING COUNT(*) < 5000
+                )
+            """)
         except Exception as e:
             print(e)
         conn.commit()

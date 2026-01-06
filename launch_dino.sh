@@ -1,11 +1,11 @@
 #!/bin/bash
 
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem-per-cpu=1G
+#SBATCH --cpus-per-task=2
+#SBATCH --mem-per-cpu=2G
 #SBATCH --job-name=dino
-#SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job5.out
-#SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job5.err
+#SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.out
+#SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.err
 
 module load releases/2023b
 module load Python/3.11.5-GCCcore-13.2.0

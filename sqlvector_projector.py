@@ -3,6 +3,7 @@ import os
 import json
 import hashlib
 import itertools
+import sys
 from typing import List, Tuple, Any, Optional
 
 import numpy as np
@@ -31,12 +32,15 @@ def connect_vec_db(db_path: str, require_vec0: bool = False) -> Connection:
     try:
         aconn = apsw.Connection(db_path)
         
-        # Set PRAGMA settings for performance
+        # Set PRAGMA settings for performance and concurrent access
         try:
             aconn.execute("PRAGMA journal_mode=WAL")
             aconn.execute("PRAGMA synchronous=NORMAL")
             aconn.execute("PRAGMA temp_store=MEMORY")
             aconn.execute("PRAGMA cache_size=-20000")
+            # Set busy timeout to handle contention from multiple processes
+            # This prevents "database is locked" errors under concurrent access
+            aconn.execute("PRAGMA busy_timeout=30000")  # 30 seconds
         except Exception:
             pass
         
@@ -180,52 +184,145 @@ def insert_projection_batch(conn: Connection, rows: List[Tuple[Any, ...]], proj_
 
 def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     assert algo in ["tsne", "umap"], "Unknown algorithm"
-
+    
+    # Set environment variables to prevent threading issues in subprocesses
+    import os
+    import time
+    os.environ.setdefault('OMP_NUM_THREADS', '1')
+    os.environ.setdefault('MKL_NUM_THREADS', '1')
+    os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+    
     run_id = compute_run_id(model_name, hyperparams)
 
     if algo == "tsne":
         projector = TSNE(**hyperparams, random_state=42, method="exact")
     else:
-        # For UMAP, explicitly set n_jobs=1 to avoid the warning about it being overridden
-        # when random_state is set. This is the expected behavior.
+        # For UMAP, set n_jobs=1 and disable threading to prevent conflicts with process pool
         umap_params = hyperparams.copy()
-        umap_params.setdefault('n_jobs', 1)  # Set default if not provided
+        umap_params.setdefault('n_jobs', 1)
+        # Set umap._init_graph = False to avoid internal threading
         projector = UMAP(**umap_params, random_state=42)
 
     embedding = projector.fit_transform(X).astype(np.float32)
 
     # open DB and ensure vec tables exist
     db_file = os.path.join(db_path, f"{algo}.db")
-    conn = connect_vec_db(db_file)
-
-    # create vec tables with projection dimension
-    # metrics_dim is unknown here; pass a placeholder (0) — metrics table should be created elsewhere with correct dim
-    create_vec_tables(conn, proj_dim=embedding.shape[1], metrics_dim=0)
-
-    # store run metadata
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO metadata(run_id, model, params) VALUES (?, ?, ?)", (run_id, model_name, json.dumps(hyperparams)))
-    try:
-        conn.commit()
-    except Exception:
+    
+    # Retry logic for database operations (handles concurrent access corruption)
+    max_retries = 3
+    for retry in range(max_retries):
         try:
-            conn.execute('COMMIT')
-        except Exception:
-            pass
+            conn = connect_vec_db(db_file)
+            
+            # create vec tables with projection dimension
+            # metrics_dim is unknown here; pass a placeholder (0) — metrics table should be created elsewhere with correct dim
+            create_vec_tables(conn, proj_dim=embedding.shape[1], metrics_dim=0)
 
-    # insert embeddings in batches
-    batch = []
-    for i, vec in enumerate(embedding):
-        # mean_conf not available here; store 0.0 as placeholder or compute if you have it
-        batch.append((int(i), run_id, model_name, 0.0, vec))
-        if len(batch) >= 128:
-            insert_projection_batch(conn, batch, proj_dim=embedding.shape[1])
+            # store run metadata
+            cur = conn.cursor()
+            cur.execute("INSERT OR REPLACE INTO metadata(run_id, model, params) VALUES (?, ?, ?)", (run_id, model_name, json.dumps(hyperparams)))
+            try:
+                conn.commit()
+            except Exception:
+                try:
+                    conn.execute('COMMIT')
+                except Exception:
+                    pass
+
+            # insert embeddings in batches
             batch = []
-    if batch:
-        insert_projection_batch(conn, batch, proj_dim=embedding.shape[1])
+            for i, vec in enumerate(embedding):
+                # mean_conf not available here; store 0.0 as placeholder or compute if you have it
+                batch.append((int(i), run_id, model_name, 0.0, vec))
+                if len(batch) >= 128:
+                    insert_projection_batch(conn, batch, proj_dim=embedding.shape[1])
+                    batch = []
+            if batch:
+                insert_projection_batch(conn, batch, proj_dim=embedding.shape[1])
 
-    conn.close()
-    return run_id
+            conn.close()
+            return run_id
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            if "not a database" in error_str or "corrupted" in error_str or "malformed" in error_str:
+                # Database is corrupted, try to recover
+                if retry < max_retries - 1:
+                    try:
+                        if 'conn' in locals():
+                            conn.close()
+                    except Exception:
+                        pass
+                    
+                    # Try to recover using integrity check and salvage
+                    if os.path.exists(db_file):
+                        try:
+                            # Try to dump good records using sqlite3
+                            import sqlite3
+                            temp_db = f"{db_file}.recovery.db"
+                            
+                            # First, try integrity check
+                            temp_conn = sqlite3.connect(db_file)
+                            temp_cur = temp_conn.cursor()
+                            temp_cur.execute("PRAGMA integrity_check")
+                            integrity = temp_cur.fetchone()[0]
+                            
+                            if integrity == "ok":
+                                temp_conn.close()
+                            else:
+                                # Try to dump to new database
+                                temp_conn.execute(f"BEGIN;")
+                                temp_conn.execute(f"PRAGMA wal_checkpoint(TRUNCATE)")
+                                
+                                # Create new database and copy good data
+                                with sqlite3.connect(temp_db) as new_conn:
+                                    new_conn.execute("ATTACH DATABASE ? AS old_db", (db_file,))
+                                    
+                                    # Copy metadata
+                                    new_conn.execute("CREATE TABLE IF NOT EXISTS metadata (run_id TEXT PRIMARY KEY, model TEXT, params TEXT)")
+                                    new_conn.execute("INSERT OR IGNORE INTO metadata SELECT * FROM old_db.metadata")
+                                    
+                                    # Copy projections table structure
+                                    new_conn.execute("""CREATE TABLE IF NOT EXISTS vec_projections (
+                                        id INTEGER, run_id TEXT, model TEXT, mean_conf REAL, embedding BLOB,
+                                        PRIMARY KEY(id, run_id)
+                                    """)
+                                    
+                                    # Try to copy valid rows
+                                    try:
+                                        new_conn.execute("INSERT OR IGNORE INTO vec_projections SELECT * FROM old_db.vec_projections")
+                                    except Exception:
+                                        pass
+                                    
+                                    new_conn.commit()
+                                    new_conn.execute("DETACH DATABASE old_db")
+                                
+                                temp_conn.close()
+                                
+                                # Rename corrupted DB and use recovered one
+                                corrupted_db = f"{db_file}.corrupted"
+                                if os.path.exists(corrupted_db):
+                                    os.remove(corrupted_db)  # Remove old corrupted backup
+                                os.rename(db_file, corrupted_db)
+                                os.rename(temp_db, db_file)
+                                print(f"[RECOVERY] Salvaged database, corrupted file renamed to {corrupted_db}", file=sys.stderr)
+                                
+                        except Exception as recovery_error:
+                            print(f"[RECOVERY] Failed to recover {db_file}: {recovery_error}", file=sys.stderr)
+                            # Fall back to renaming corrupted database (don't remove)
+                            if os.path.exists(db_file):
+                                corrupted_db = f"{db_file}.corrupted"
+                                if os.path.exists(corrupted_db):
+                                    os.remove(corrupted_db)
+                                os.rename(db_file, corrupted_db)
+                                print(f"[RECOVERY] Corrupted database renamed to {corrupted_db}", file=sys.stderr)
+                    
+                    time.sleep(1)  # Wait before retry
+                    continue
+            # If not a corruption error or retries exhausted, re-raise
+            if retry == max_retries - 1:
+                raise
+            time.sleep(0.5)
 
 # ---------- Load vectors ----------
 def load_vectors_from_db(db_path, algo, run_id, ids=None) -> np.ndarray:
@@ -243,7 +340,7 @@ def load_vectors_from_db(db_path, algo, run_id, ids=None) -> np.ndarray:
             placeholders = ",".join("?" * len(ids))
             cur.execute(f"SELECT id, embedding FROM vec_projections WHERE run_id=? AND id IN ({placeholders}) ORDER BY id", (run_id, *ids))
         rows = cur.fetchall()
-    except sqlite3.OperationalError:
+    except Exception:
         # fallback: maybe vec_projections is a fallback table or vec0 not available
         if ids is None:
             cur.execute("SELECT id, embedding FROM vec_projections WHERE run_id=? ORDER BY id", (run_id,))

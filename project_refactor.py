@@ -3,6 +3,7 @@ import os
 import itertools
 import json
 import concurrent.futures
+from tqdm import tqdm
 from sqlvector_projector import (
     connect_vec_db,
     create_vec_tables,
@@ -20,18 +21,51 @@ PROJ_DB_DIR = "/globalscratch/ucl/irec/darimez/dino/proj/"
 METRICS_DB = os.path.join(PROJ_DB_DIR, "metrics.db")
 # Parallel execution configuration
 USE_PARALLEL = True  # Set to False to disable parallel execution for debugging
-MAX_WORKERS = 32   # None for auto-detect, or specify maximum number of workers
+MAX_WORKERS = 1   # Reduced from 24 to prevent OOM - UMAP is memory intensive
+
+# Memory management
+MAX_MEMORY_PERCENT = 70  # Max percent of available memory to use
 
 
-def compute_projection_task(task, X, model_name, args):
+# Global storage for worker initialization
+_worker_X = None
+_worker_model_name = None
+_worker_args = None
+
+def _init_worker(X, model_name, args):
+    """Initializer function for worker processes - stores data in global to avoid pickle overhead"""
+    global _worker_X, _worker_model_name, _worker_args
+    _worker_X = X
+    _worker_model_name = model_name
+    _worker_args = args
+    import multiprocessing as mp 
+    import sys
+    pid = os.getpid()
+    print(f"[WORKER_INIT] PID={pid} started | CPU count={mp.cpu_count()}", flush=True, file=sys.stderr)
+
+
+def compute_projection_task(task):
     """Helper function to compute a single projection task"""
-    # Initialize logger for this worker process
-    logger = get_logger(args.debug)
+    import os
+    import sys
+    import gc
+    
+    pid = os.getpid()
+    logger = get_logger(_worker_args.debug)
+    
     algo = task["algo"]
     params = {k: v for k, v in task.items() if k != "algo"}
-    logger.info(f"Computing {algo} projection for model {model_name} with params {params}")
-    # compute_and_store will create vec tables and metadata and insert projections
-    return compute_and_store(X, model_name, params, db_path=PROJ_DB_DIR, algo=algo)
+    
+    try:
+        # compute_and_store will create vec tables and metadata and insert projections
+        result = compute_and_store(_worker_X, _worker_model_name, params, db_path=PROJ_DB_DIR, algo=algo)
+        # Clean up memory after each task
+        del result
+        gc.collect()
+        return {"success": True, "task": task}
+    except Exception as e:
+        logger.error(f"Error computing projection for task {task}: {e}")
+        return {"success": False, "task": task, "error": str(e)}
 
 
 def expand_params(param_dict, algo):
@@ -84,14 +118,15 @@ def project(args):
         "n_components": [2, 10, 25],
     }
     tsne_params = {
-        "n_components": [2, 10, 25],
+        "n_components": [2],
         "perplexity": [10, 30, 50],
         "early_exaggeration": [8, 16],
         "learning_rate": [100, 300],
         "max_iter": [1000],
     }
 
-    all_hyperparams = list(expand_params(umap_params, "umap")) + list(expand_params(tsne_params, "tsne"))
+    all_hyperparams = list(expand_params(umap_params, "umap")) 
+    all_hyperparams += list(expand_params(tsne_params, "tsne"))
 
     # Clean up orphan metadata entries in projection DBs (optional)
     for dbname in ("tsne.db", "umap.db"):
@@ -109,7 +144,8 @@ def project(args):
 
     # iterate over embedding files (one file per model)
     tables = [os.path.join(EMBEDDINGS_DIR, f) for f in os.listdir(EMBEDDINGS_DIR) if f.endswith(".db")]
-    for table in [tables[5]]:
+    print(len(tables), "embedding tables found.")
+    for table in tables[-5:][::-1]:  # process only the last table for now
         model_name = os.path.basename(table).split(".")[0]
         logger.debug(f"Processing {model_name}")
 
@@ -150,7 +186,6 @@ def project(args):
         ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
         
         # Determine number of workers based on configuration
-        import multiprocessing
         num_workers = MAX_WORKERS
         
         # Ensure tasks are processed in deterministic order by sorting them
@@ -159,46 +194,63 @@ def project(args):
         
         logger.info(f"USE_PARALLEL: {USE_PARALLEL}, num_workers: {num_workers}, len(tasks_sorted): {len(tasks_sorted)}")
         if USE_PARALLEL and num_workers > 1 and len(tasks_sorted) > 1:
-            logger.info(f"Using parallel execution with {num_workers} workers")
-            
-            # Add memory monitoring and limit batch size for parallel processing
-            import psutil
-            import gc
             import time
-            import random
             
-            logger.info(f"Creating ProcessPoolExecutor with max_workers={num_workers}")
-            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-                # Create a partial function with fixed arguments
-                from functools import partial
-                task_func = partial(compute_projection_task, X=X, model_name=model_name, args=args) 
-                  
-                future_to_task = {executor.submit(task_func, task): task for task in tasks_sorted}
-                
-                # Process results and clean up memory
-                for future in concurrent.futures.as_completed(future_to_task):
-                    task = future_to_task[future]
-                    try:
-                        result = future.result()
-                        logger.debug(f"Completed projection task: {result}")
-                    except Exception as e:
-                        logger.error(f"Error computing projection for task {task}: {e}")
-                        # Add retry logic for database locks
-                        if "database is locked" in str(e):
-                            max_retries = 5
-                            for retry in range(max_retries):
-                                try:
-                                    # logger.info(f"Retrying task {task} (attempt {retry + 1}/{max_retries})")
-                                    time.sleep(random.uniform(0.5, 2.0))  # Random delay before retry
-                                    result = compute_projection_task(task, X, model_name, args)
-                                    logger.info(f"Completed projection task on retry: {result}")
-                                    break
-                                except Exception as retry_error:
-                                    if retry == max_retries - 1:
-                                        logger.error(f"Failed after {max_retries} retries for task {task}: {retry_error}")
-                                    continue
+            # Set environment variables to limit threading in child processes
+            os.environ['OMP_NUM_THREADS'] = '1'
+            os.environ['MKL_NUM_THREADS'] = '1'
+            os.environ['OPENBLAS_NUM_THREADS'] = '1'
+            
+            # Use initializer pattern to pass X to workers without pickle overhead per task
+            try:
+                with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=num_workers,
+                    initializer=_init_worker,
+                    initargs=(X, model_name, args)
+                ) as executor:
+                    # Submit all tasks to executor
+                    futures = []
+                    for task in tasks_sorted:
+                        future = executor.submit(compute_projection_task, task)
+                        futures.append(future)
                     
-                    # Clean up memory after each task
-                    gc.collect()
+                    # Create mapping from future to task
+                    future_to_task = {f: t for f, t in zip(futures, tasks_sorted)}
+                    
+                    start_time = time.time()
+                    
+                    # Process results with tqdm progress bar
+                    completed = 0
+                    with tqdm(total=len(future_to_task), desc="Projections", unit="task") as pbar:
+                        for future in concurrent.futures.as_completed(future_to_task):
+                            task = future_to_task[future]
+                            completed += 1
+                            pbar.update(1)
+                            
+                            try:
+                                result = future.result()
+                                if not result.get("success", False):
+                                    logger.error(f"Task failed: {task} - Error: {result.get('error', 'Unknown')}")
+                            except concurrent.futures.process.BrokenProcessPool as e:
+                                logger.error(f"Process pool was broken for task {task}: {e}")
+                            except Exception as e:
+                                logger.error(f"Unexpected error for task {task}: {e}")
+            except Exception as e:
+                logger.error(f"Error in parallel execution, falling back to sequential: {e}")
+                # Fallback to sequential execution
+                for task in tasks_sorted:
+                    try:
+                        compute_projection_task(task)
+                    except Exception as e:
+                        logger.error(f"Sequential execution error for task {task}: {e}")
+        elif tasks_sorted:
+            # Sequential execution
+            logger.info("Running projections sequentially")
+            for task in tqdm(tasks_sorted, total=len(tasks_sorted), desc="Projections", unit="task"):
+                try:
+                    _init_worker(X, model_name, args)
+                    compute_projection_task(task)
+                except Exception as e:
+                    logger.error(f"Sequential execution error for task {task}: {e}")
 
     logger.info("Projection pipeline finished.")
