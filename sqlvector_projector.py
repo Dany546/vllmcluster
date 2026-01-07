@@ -4,6 +4,7 @@ import json
 import hashlib
 import itertools
 import sys
+import time
 from typing import List, Tuple, Any, Optional
 
 import numpy as np
@@ -40,14 +41,26 @@ def connect_vec_db(db_path: str, require_vec0: bool = False) -> Connection:
             aconn.execute("PRAGMA cache_size=-20000")
             # Set busy timeout to handle contention from multiple processes
             # This prevents "database is locked" errors under concurrent access
-            aconn.execute("PRAGMA busy_timeout=30000")  # 30 seconds
+            # Set busy timeout to handle contention from multiple processes
+            # This prevents "database is locked" errors under concurrent access. Tunable via SQLVEC_BUSY_MS.
+            busy_ms = int(os.environ.get('SQLVEC_BUSY_MS', '30000'))
+            aconn.execute(f"PRAGMA busy_timeout={busy_ms}")  # ms
         except Exception:
             pass
         
+        # Enable extension loading in APSW (may be disabled by default in some builds)
+        try:
+            aconn.enable_load_extension(True)
+        except Exception:
+            try:
+                aconn.enableloadextension(True)
+            except Exception:
+                pass
+
         # Try to load vec0 extension if available
         vecpath = os.environ.get("VECTOR_EXT_PATH") or os.environ.get("VEC0_SO")
         if vecpath and os.path.exists(vecpath):
-            try:
+            try:    
                 aconn.loadextension(vecpath)
                 # Verify vec0 is loaded
                 try:
@@ -61,8 +74,51 @@ def connect_vec_db(db_path: str, require_vec0: bool = False) -> Connection:
                     raise RuntimeError(f"Failed to load vec0 extension via APSW: {e}")
                 # Continue without vec0 if not required
                 return aconn
-        elif require_vec0:
-            raise RuntimeError('vec0 shared library not found; set VECTOR_EXT_PATH or VEC0_SO to the vec0 .so path')
+        else:
+            # Try to register vec0 via the python package `sqlite_vec` if available.
+            # This is common when vec0 is supplied by the `sqlite-vec` package.
+            try:
+                import sqlite_vec
+                # First try to find the vec0 shared object shipped inside the package and load via APSW
+                try:
+                    base = os.path.dirname(getattr(sqlite_vec, "__file__", ""))
+                    candidates = [os.path.join(base, "vec0.so"), os.path.join(base, "vec0", "vec0.so")]
+                    vec_so = None
+                    for c in candidates:
+                        if c and os.path.exists(c):
+                            vec_so = c
+                            break
+                    if vec_so:
+                        try:
+                            aconn.loadextension(vec_so)
+                            try:
+                                aconn.execute("SELECT vec_version()")
+                                return aconn
+                            except Exception:
+                                return aconn
+                        except Exception:
+                            # fall through to sqlite_vec.load fallback
+                            pass
+                    # Fallback to sqlite_vec.load(aconn) which may register vec0 differently
+                    try:
+                        sqlite_vec.load(aconn)
+                        try:
+                            aconn.execute("SELECT vec_version()")
+                            return aconn
+                        except Exception:
+                            return aconn
+                    except Exception as e:
+                        if require_vec0:
+                            raise RuntimeError(f"Failed to register vec0 via sqlite_vec: {e}")
+                        return aconn
+                except Exception as e:
+                    if require_vec0:
+                        raise RuntimeError(f"Failed to register vec0 via sqlite_vec: {e}")
+                    return aconn
+            except Exception:
+                if require_vec0:
+                    raise RuntimeError('vec0 shared library not found; set VECTOR_EXT_PATH or VEC0_SO to the vec0 .so path')
+                # else continue without vec0
         
         return aconn
     except Exception as e:
@@ -92,10 +148,12 @@ def compute_run_id(model: str, hyperparams: dict) -> str:
     return f"{model}_{run_hash}"
 
 # ---------- Schema creation ----------
-def create_vec_tables(conn: Connection, proj_dim: int, metrics_dim: int):
+def create_vec_tables(conn: Connection, proj_dim: int, metrics_dim: int, require_vec0: bool = False):
     """
     Create vec0 virtual tables for projections and metrics.
     Keep a small metadata table for run-level human-readable info.
+
+    If `require_vec0` is True, fail fast when vec0 cannot be created instead of creating a fallback table.
     """
     cur = conn.cursor()
 
@@ -112,8 +170,11 @@ def create_vec_tables(conn: Connection, proj_dim: int, metrics_dim: int):
     # embedding dimension = proj_dim
     try:
         cur.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_projections USING vec0(id UNINDEXED, run_id UNINDEXED, model UNINDEXED, mean_conf, embedding FLOAT[{proj_dim}])")
-    except Exception:
-        # vec0 not available or vec0 constructor incompatible; create a fallback table with BLOB
+    except Exception as e:
+        # vec0 not available or vec0 constructor incompatible
+        if require_vec0:
+            raise RuntimeError(f"Failed to create vec_projections using vec0: {e}")
+        # create a fallback table with BLOB
         cur.execute("""
             CREATE TABLE IF NOT EXISTS vec_projections (
                 id INTEGER,
@@ -124,11 +185,18 @@ def create_vec_tables(conn: Connection, proj_dim: int, metrics_dim: int):
                 PRIMARY KEY(id, run_id)
             )
         """)
+        # Create an index on run_id to accelerate queries filtering by run_id for fallback table
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_vec_projections_run_id ON vec_projections(run_id)")
+        except Exception:
+            pass
 
     # vec_metrics: store per-image metric vectors (hit_freq, mean_iou, mean_conf, cat counts..., supercat counts...)
     try:
         cur.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_metrics USING vec0(img_id UNINDEXED, model UNINDEXED, embedding FLOAT[{metrics_dim}])")
-    except Exception:
+    except Exception as e:
+        if require_vec0:
+            raise RuntimeError(f"Failed to create vec_metrics using vec0: {e}")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS vec_metrics (
                 img_id INTEGER,
@@ -137,6 +205,10 @@ def create_vec_tables(conn: Connection, proj_dim: int, metrics_dim: int):
                 PRIMARY KEY(model, img_id)
             )
         """)
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_vec_metrics_model ON vec_metrics(model)")
+        except Exception:
+            pass
 
     # Commit for both sqlite3 and APSW connections
     try:
@@ -148,17 +220,19 @@ def create_vec_tables(conn: Connection, proj_dim: int, metrics_dim: int):
             pass
 
 # ---------- Insert / store projections ----------
-def insert_projection_batch(conn: Connection, rows: List[Tuple[Any, ...]], proj_dim: int):
+def insert_projection_batch(conn: Connection, rows: List[Tuple[Any, ...]], proj_dim: int, is_virtual: Optional[bool] = None):
     """
     rows: list of tuples (id, run_id, model, mean_conf, embedding_numpy_array)
     If vec0 is available we insert serialized float32 into vec_projections.embedding.
+    NOTE: This function does NOT commit; caller should commit once after all batches for better performance.
     """
     cur = conn.cursor()
 
-    # Detect whether vec_projections is virtual or fallback by checking schema
-    cur.execute("PRAGMA table_info(vec_projections)")
-    cols = [r[1] for r in cur.fetchall()]
-    is_virtual = 'embedding' in cols and any(c.lower() == 'embedding' for c in cols)
+    # Detect whether vec_projections is virtual or fallback by checking schema only if not specified
+    if is_virtual is None:
+        cur.execute("PRAGMA table_info(vec_projections)")
+        cols = [r[1] for r in cur.fetchall()]
+        is_virtual = 'embedding' in cols and any(c.lower() == 'embedding' for c in cols)
 
     if is_virtual:
         # Insert serialized bytes directly; vec0 will accept the BLOB format
@@ -173,12 +247,112 @@ def insert_projection_batch(conn: Connection, rows: List[Tuple[Any, ...]], proj_
             prepared.append((int(id_), run_id, model, float(mean_conf), serialize_float32_array(emb)))
         cur.executemany("INSERT OR REPLACE INTO vec_projections(id, run_id, model, mean_conf, embedding) VALUES (?, ?, ?, ?, ?)", prepared)
 
-    # Commit for both sqlite3 and APSW connections
-    try:
-        conn.commit()
-    except Exception:
+    # Do NOT commit here; the caller should commit once after all batches for better throughput
+
+# ---------- Compute-to-file and store helpers ----------
+
+def compute_projection_to_file(X, model_name, hyperparams, out_path, algo="tsne"):
+    """Compute projection embedding and save to a NumPy file. Returns run_id."""
+    assert algo in ["tsne", "umap"], "Unknown algorithm"
+    os.environ.setdefault('OMP_NUM_THREADS', '1')
+    os.environ.setdefault('MKL_NUM_THREADS', '1')
+    os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+
+    run_id = compute_run_id(model_name, hyperparams)
+
+    if algo == "tsne":
+        projector = TSNE(**hyperparams, random_state=42, method="exact")
+    else:
+        umap_params = hyperparams.copy()
+        umap_params.setdefault('n_jobs', 1)
+        projector = UMAP(**umap_params, random_state=42)
+
+    t0 = time.perf_counter()
+    embedding = projector.fit_transform(X).astype(np.float32)
+    t_embed = time.perf_counter() - t0
+
+    # Save to disk to avoid transferring large arrays between processes
+    np.save(out_path, embedding)
+    print(f"[COMPUTE_TO_FILE] algo={algo} run_id={run_id} embed_time={t_embed:.2f}s rows={embedding.shape[0]} file={out_path}", file=sys.stderr)
+    return run_id
+
+
+def store_projection(embedding: np.ndarray, model_name: str, run_id: str, hyperparams: dict, db_path: str = "", algo: str = "tsne"):
+    """Store a precomputed embedding array into the vector DB. Retries on database lock errors."""
+    db_file = os.path.join(db_path, f"{algo}.db")
+    max_retries = int(os.environ.get('SQLVEC_STORE_RETRIES', '10'))
+    backoff = float(os.environ.get('SQLVEC_STORE_BACKOFF', '0.5'))
+
+    for attempt in range(max_retries):
         try:
-            conn.execute('COMMIT')
+            conn = connect_vec_db(db_file, require_vec0=True)
+            create_vec_tables(conn, proj_dim=embedding.shape[1], metrics_dim=0, require_vec0=True)
+
+            # Determine whether vec_projections is virtual once
+            cur = conn.cursor()
+            is_virtual = False
+            try:
+                cur.execute("PRAGMA table_info(vec_projections)")
+                cols = [r[1] for r in cur.fetchall()]
+                is_virtual = 'embedding' in cols and any(c.lower() == 'embedding' for c in cols)
+            except Exception:
+                is_virtual = False
+
+            # Bulk insert in a single transaction
+            try:
+                conn.execute('BEGIN')
+            except Exception:
+                pass
+
+            cur.execute("INSERT OR REPLACE INTO metadata(run_id, model, params) VALUES (?, ?, ?)", (run_id, model_name, json.dumps(hyperparams)))
+
+            batch_size = int(os.environ.get('SQLVEC_BATCH', '1024'))
+            batch = []
+            t_db_start = time.perf_counter()
+            for i, vec in enumerate(embedding):
+                batch.append((int(i), run_id, model_name, 0.0, vec))
+                if len(batch) >= batch_size:
+                    insert_projection_batch(conn, batch, proj_dim=embedding.shape[1], is_virtual=is_virtual)
+                    batch = []
+            if batch:
+                insert_projection_batch(conn, batch, proj_dim=embedding.shape[1], is_virtual=is_virtual)
+
+            try:
+                conn.commit()
+            except Exception:
+                try:
+                    conn.execute('COMMIT')
+                except Exception:
+                    pass
+            t_db = time.perf_counter() - t_db_start
+            print(f"[STORE] algo={algo} run_id={run_id} db_time={t_db:.2f}s rows={embedding.shape[0]}", file=sys.stderr)
+            conn.close()
+            return
+        except Exception as e:
+            err = str(e).lower()
+            if 'database is locked' in err:
+                # backing off and retry
+                wait = backoff * (1 + attempt * 0.5)
+                print(f"[STORE_RETRY] database locked, attempt {attempt+1}/{max_retries}, sleeping {wait:.2f}s", file=sys.stderr)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                time.sleep(wait)
+                continue
+            else:
+                # re-raise other exceptions
+                raise
+    raise RuntimeError(f"Failed to store projection after {max_retries} retries due to database locks")
+
+
+def store_projection_from_file(npy_path: str, model_name: str, run_id: str, hyperparams: dict, db_path: str = "", algo: str = "tsne"):
+    embedding = np.load(npy_path, mmap_mode=None)
+    try:
+        store_projection(embedding, model_name, run_id, hyperparams, db_path=db_path, algo=algo)
+    finally:
+        try:
+            os.remove(npy_path)
         except Exception:
             pass
 
@@ -203,7 +377,10 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
         # Set umap._init_graph = False to avoid internal threading
         projector = UMAP(**umap_params, random_state=42)
 
+    # Time embedding computation separately for diagnostics
+    t0 = time.perf_counter()
     embedding = projector.fit_transform(X).astype(np.float32)
+    t_embed = time.perf_counter() - t0
 
     # open DB and ensure vec tables exist
     db_file = os.path.join(db_path, f"{algo}.db")
@@ -212,15 +389,45 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
     max_retries = 3
     for retry in range(max_retries):
         try:
-            conn = connect_vec_db(db_file)
+            # Require vec0 for projection storage — fail fast if the vec0 extension is not available
+            conn = connect_vec_db(db_file, require_vec0=True)
             
-            # create vec tables with projection dimension
-            # metrics_dim is unknown here; pass a placeholder (0) — metrics table should be created elsewhere with correct dim
-            create_vec_tables(conn, proj_dim=embedding.shape[1], metrics_dim=0)
+            # create vec tables with projection dimension (and require vec0 to avoid fallback tables)
+            create_vec_tables(conn, proj_dim=embedding.shape[1], metrics_dim=0, require_vec0=True)
 
-            # store run metadata
+            # Determine whether vec_projections is virtual once to avoid repeated PRAGMA calls
             cur = conn.cursor()
+            is_virtual = False
+            try:
+                cur.execute("PRAGMA table_info(vec_projections)")
+                cols = [r[1] for r in cur.fetchall()]
+                is_virtual = 'embedding' in cols and any(c.lower() == 'embedding' for c in cols)
+            except Exception:
+                is_virtual = False
+
+            # Start a single transaction for bulk inserts for better throughput
+            try:
+                conn.execute('BEGIN')
+            except Exception:
+                pass
+
+            # store run metadata (within the transaction)
             cur.execute("INSERT OR REPLACE INTO metadata(run_id, model, params) VALUES (?, ?, ?)", (run_id, model_name, json.dumps(hyperparams)))
+
+            # Insert embeddings in batches; avoid committing on each batch
+            batch = []
+            batch_size = int(os.environ.get('SQLVEC_BATCH', '1024'))
+            t_db_start = time.perf_counter()
+            for i, vec in enumerate(embedding):
+                # mean_conf not available here; store 0.0 as placeholder or compute if you have it
+                batch.append((int(i), run_id, model_name, 0.0, vec))
+                if len(batch) >= batch_size:
+                    insert_projection_batch(conn, batch, proj_dim=embedding.shape[1], is_virtual=is_virtual)
+                    batch = []
+            if batch:
+                insert_projection_batch(conn, batch, proj_dim=embedding.shape[1], is_virtual=is_virtual)
+
+            # Commit once for the whole run
             try:
                 conn.commit()
             except Exception:
@@ -228,21 +435,13 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
                     conn.execute('COMMIT')
                 except Exception:
                     pass
+            t_db = time.perf_counter() - t_db_start
 
-            # insert embeddings in batches
-            batch = []
-            for i, vec in enumerate(embedding):
-                # mean_conf not available here; store 0.0 as placeholder or compute if you have it
-                batch.append((int(i), run_id, model_name, 0.0, vec))
-                if len(batch) >= 128:
-                    insert_projection_batch(conn, batch, proj_dim=embedding.shape[1])
-                    batch = []
-            if batch:
-                insert_projection_batch(conn, batch, proj_dim=embedding.shape[1])
+            # Emit lightweight diagnostics
+            print(f"[PROJECTION] algo={algo} run_id={run_id} embed_time={t_embed:.2f}s db_time={t_db:.2f}s rows={embedding.shape[0]}", file=sys.stderr)
 
             conn.close()
             return run_id
-            
         except Exception as e:
             error_str = str(e).lower()
             if "not a database" in error_str or "corrupted" in error_str or "malformed" in error_str:
@@ -286,7 +485,7 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
                                     new_conn.execute("""CREATE TABLE IF NOT EXISTS vec_projections (
                                         id INTEGER, run_id TEXT, model TEXT, mean_conf REAL, embedding BLOB,
                                         PRIMARY KEY(id, run_id)
-                                    """)
+                                    )""")
                                     
                                     # Try to copy valid rows
                                     try:
@@ -332,14 +531,13 @@ def load_vectors_from_db(db_path, algo, run_id, ids=None) -> np.ndarray:
     conn = connect_vec_db(db_file, require_vec0=True)
     cur = conn.cursor()
 
-    # Try to read from vec_projections; if virtual table exists we can select embedding directly
+    # Try to read from vec_projections; stream rows in chunks to avoid a huge single fetch
     try:
         if ids is None:
             cur.execute("SELECT id, embedding FROM vec_projections WHERE run_id=? ORDER BY id", (run_id,))
         else:
             placeholders = ",".join("?" * len(ids))
             cur.execute(f"SELECT id, embedding FROM vec_projections WHERE run_id=? AND id IN ({placeholders}) ORDER BY id", (run_id, *ids))
-        rows = cur.fetchall()
     except Exception:
         # fallback: maybe vec_projections is a fallback table or vec0 not available
         if ids is None:
@@ -347,20 +545,34 @@ def load_vectors_from_db(db_path, algo, run_id, ids=None) -> np.ndarray:
         else:
             placeholders = ",".join("?" * len(ids))
             cur.execute(f"SELECT id, embedding FROM vec_projections WHERE run_id=? AND id IN ({placeholders}) ORDER BY id", (run_id, *ids))
-        rows = cur.fetchall()
+
+    # Stream rows using fetchmany to limit memory pressure and allow progress logging
+    vectors = []
+    first_blob = None
+    chunk_size = 1024
+    total_rows = 0
+    t_start = time.perf_counter()
+    while True:
+        batch = cur.fetchmany(chunk_size)
+        if not batch:
+            break
+        for _id, blob in batch:
+            if first_blob is None:
+                first_blob = blob
+            total_rows += 1
+            # Defer deserialization until we know the dimension
+            vectors.append(blob)
+    t_io = time.perf_counter() - t_start
 
     conn.close()
-    if not rows:
+    if not vectors:
         return np.array([])
 
-    # infer dim from first blob
-    first_blob = rows[0][1]
+    # infer dim from first blob and deserialize
     dim = len(np.frombuffer(first_blob, dtype=np.float32))
-    vectors = []
-    for _id, blob in rows:
-        vec = deserialize_float32_array(blob, dim)
-        vectors.append(vec)
-    return np.vstack(vectors)
+    out = [deserialize_float32_array(b, dim) for b in vectors]
+    print(f"[LOAD_VECTORS] algo={algo} run_id={run_id} rows={total_rows} io_time={t_io:.2f}s dim={dim}", file=sys.stderr)
+    return np.vstack(out)
 
 def get_vector_slice(db_path, algo, run_id, ids=None, dims=[0, 1]):
     vectors = load_vectors_from_db(db_path, algo, run_id, ids)

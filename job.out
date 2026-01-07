@@ -1,0 +1,7 @@
+no such table: embeddings
+Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/dinov3.db
+5000
+Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/yolov8x-seg.db
+5000
+Loading embeddings from /globalscratch/ucl/irec/darimez/dino/embeddings/dinov3_attention.db
+5000

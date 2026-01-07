@@ -6,11 +6,70 @@ import os
 import sqlite3
 from collections import defaultdict
 
+import concurrent
+
 import numpy as np
 import pandas as pd
 from sklearn.manifold import TSNE
 from umap import UMAP
 from utils import dict_to_filename, get_logger, get_lookups, load_embeddings
+from sqlvector_projector import (
+    connect_vec_db,
+    create_vec_tables,
+    compute_and_store,
+    compute_and_store_metrics,
+    load_vectors_from_db,
+    get_vector_slice,
+    compute_run_id,
+    compute_projection_to_file,
+    store_projection_from_file,
+)
+from tqdm import tqdm   
+
+EMBEDDINGS_DIR = "/globalscratch/ucl/irec/darimez/dino/embeddings/"
+PROJ_DB_DIR = "/CECI/home/ucl/irec/darimez" # "/globalscratch/ucl/irec/darimez/dino/proj/"
+METRICS_DB = os.path.join(PROJ_DB_DIR, "metrics.db")
+# Global storage for worker initialization
+_worker_X = None
+_worker_model_name = None
+_worker_args = None
+
+def _init_worker(X, model_name, args):
+    """Initializer function for worker processes - stores data in global to avoid pickle overhead"""
+    global _worker_X, _worker_model_name, _worker_args
+    _worker_X = X
+    _worker_model_name = model_name
+    _worker_args = args
+    import multiprocessing as mp 
+    import sys
+    pid = os.getpid()
+    print(f"[WORKER_INIT] PID={pid} started | CPU count={mp.cpu_count()}", flush=True, file=sys.stderr)
+
+def compute_projection_task(task):
+    """Helper function to compute a single projection task (computes embedding and writes it to a temp file).
+    The main process will be responsible for storing the file into the projection DB to avoid concurrent writers."""
+    import os
+    import sys
+    import gc
+    
+    pid = os.getpid()
+    logger = get_logger(_worker_args.debug)
+    
+    algo = task["algo"]
+    params = {k: v for k, v in task.items() if k != "algo"}
+
+    try:
+        # compute embedding and save to a temp file (worker-local) to avoid DB contention
+        run_id = compute_run_id(_worker_model_name, params)
+        tmp_dir = os.environ.get('SQLVEC_TMP', PROJ_DB_DIR)
+        tmp_path = os.path.join(tmp_dir, f"proj_{algo}_{run_id}_{pid}.npy")
+        compute_projection_to_file(_worker_X, _worker_model_name, params, out_path=tmp_path, algo=algo)
+        # Clean up memory after each task
+        gc.collect()
+        return {"success": True, "task": task, "tmp_path": tmp_path, "run_id": run_id}
+    except Exception as e:
+        logger.error(f"Error computing projection for task {task}: {e}")
+        return {"success": False, "task": task, "error": str(e)}
 
 
 def compute_run_id(model: str, hyperparams: dict) -> str:
@@ -235,7 +294,7 @@ def get_tasks(all_hyperparams, model_name):
         )
         # Check if run_id already exists in metadata
         conn = sqlite3.connect(
-            os.path.join("/globalscratch/ucl/irec/darimez/dino/proj/", f"{algo}.db")
+            os.path.join("/globalscratch/ucl/irec/darimez/dino/proj2/", f"{algo}.db")
         )
         cur = conn.cursor()
         cols = ", ".join(
@@ -278,17 +337,17 @@ def project(args):
     ]
     logger = get_logger(args.debug)
 
-    db_path = "/globalscratch/ucl/irec/darimez/dino/proj/"
+    db_path = "/globalscratch/ucl/irec/darimez/dino/proj2/"
     umap_params = {
-        "n_neighbors": [10, 20, 40, 60],
-        "min_dist": [0.02, 0.1, 0.5],
-        "n_components": [2, 10, 20],
+        "n_components": [2, 10, 25],
+        "n_neighbors": [10, 20, 50, 100],
+        "min_dist": [0.0, 0.1, 0.5], 
     }
     tsne_params = {
-        "n_components": [2, 10, 20],
-        "perplexity": [10, 30, 50],
-        "early_exaggeration": [8, 16],
-        "learning_rate": [100, 300],
+        "n_components": [10, 25],
+        "perplexity": [40],
+        "early_exaggeration": [20],
+        "learning_rate": [200],
         "max_iter": [1000],
     }
 
@@ -300,14 +359,15 @@ def project(args):
             d["algo"] = algo
             yield d
 
-    all_hyperparams = list(expand_params(umap_params, "umap")) + list(
+    # all_hyperparams = list(expand_params(umap_params, "umap")) 
+    all_hyperparams = list(
         expand_params(tsne_params, "tsne")
     )
     # Clean up failed/incomplete entries
     # Delete metadata where run_id has no embeddings OR incomplete embeddings (< 5000)
     for db in ["tsne.db", "umap.db"]:
         conn = sqlite3.connect(
-            os.path.join("/globalscratch/ucl/irec/darimez/dino/proj/", db)
+            os.path.join(db_path, db)
         )
         c = conn.cursor()
         try:
@@ -352,13 +412,82 @@ def project(args):
         logger.info(
             f"Computing projections for {len(tasks)}/{len(all_hyperparams)} parameters"
         )
-        for task in tasks:
-            if X is None:
-                ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
-            compute_and_store(
-                X,
-                model_name,
-                {k: v for k, v in task.items() if k != "algo"},
-                db_path=db_path,
-                algo=task["algo"],
-            )
+        USE_PARALLEL = False
+        num_workers = 8
+        logger.info(f"USE_PARALLEL: {USE_PARALLEL}, num_workers: {num_workers}, len(tasks): {len(tasks)}")
+        if USE_PARALLEL and num_workers > 1 and len(tasks) > 1:
+            import time
+            
+            # Set environment variables to limit threading in child processes
+            os.environ['OMP_NUM_THREADS'] = '1'
+            os.environ['MKL_NUM_THREADS'] = '1'
+            os.environ['OPENBLAS_NUM_THREADS'] = '1'
+            
+            # Use initializer pattern to pass X to workers without pickle overhead per task
+            try:
+                with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=num_workers,
+                    initializer=_init_worker,
+                    initargs=(X, model_name, args)
+                ) as executor:
+                    # Submit all tasks to executor
+                    futures = []
+                    for task in tasks:
+                        future = executor.submit(compute_projection_task, task)
+                        futures.append(future)
+                    
+                    # Create mapping from future to task
+                    future_to_task = {f: t for f, t in zip(futures, tasks)}
+                    
+                    start_time = time.time()
+                    
+                    # Process results with tqdm progress bar
+                    completed = 0
+                    with tqdm(total=len(future_to_task), desc="Projections", unit="task") as pbar:
+                        for future in concurrent.futures.as_completed(future_to_task):
+                            task = future_to_task[future]
+                            completed += 1
+                            pbar.update(1)
+                            
+                            try:
+                                result = future.result()
+                                if not result.get("success", False):
+                                    logger.error(f"Task failed: {task} - Error: {result.get('error', 'Unknown')}")
+                                else:
+                                    # If worker put embedding on disk, the main process stores it to DB to avoid concurrent writers
+                                    tmp_path = result.get('tmp_path')
+                                    if tmp_path:
+                                        try:
+                                            store_projection_from_file(tmp_path, model_name, result.get('run_id'), {k: v for k,v in task.items() if k != 'algo'}, db_path=PROJ_DB_DIR, algo=task['algo'])
+                                        except Exception as e:
+                                            logger.error(f"Failed to store projection for task {task}: {e}")
+                            except concurrent.futures.process.BrokenProcessPool as e:
+                                logger.error(f"Process pool was broken for task {task}: {e}")
+                            except Exception as e:
+                                logger.error(f"Unexpected error for task {task}: {e}")
+            except Exception as e:
+                logger.error(f"Error in parallel execution, falling back to sequential: {e}")
+                # Fallback to sequential execution
+                for task in tasks:
+                    try:
+                        res = compute_projection_task(task)
+                        if res and res.get('tmp_path'):
+                            try:
+                                store_projection_from_file(res.get('tmp_path'), model_name, res.get('run_id'), {k: v for k, v in task.items() if k != 'algo'}, db_path=PROJ_DB_DIR, algo=task['algo'])
+                            except Exception as e:
+                                logger.error(f"Storing projection failed for task {task}: {e}")
+                    except Exception as e:
+                        logger.error(f"Sequential execution error for task {task}: {e}")
+        elif tasks:
+            # Sequential execution
+            logger.info("Running projections sequentially") 
+            for task in tqdm(tasks, total=len(tasks), desc="Projections", unit="task"):
+                if X is None:
+                    ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
+                compute_and_store(
+                    X,
+                    model_name,
+                    {k: v for k, v in task.items() if k != "algo"},
+                    db_path=db_path,
+                    algo=task["algo"],
+                )

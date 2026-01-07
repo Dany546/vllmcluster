@@ -17,19 +17,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sqlvector_projector import connect_vec_db, compute_run_id
 
 # Configure paths
-PROJ_DB_DIR = "/globalscratch/ucl/irec/darimez/dino/proj/"
+PROJ_DB_DIR = "/globalscratch/ucl/irec/darimez/dino/proj2/" # "/globalscratch/ucl/irec/darimez/dino/proj/"
 
 # Hyperparameter grids (same as project_refactor.py)
 umap_params = {
-    "n_neighbors": [10, 20, 40, 60],
-    "min_dist": [0.02, 0.1, 0.5],
     "n_components": [2, 10, 25],
+    "n_neighbors": [10, 20, 50, 100],
+    "min_dist": [0.0, 0.1, 0.5], 
 }
 tsne_params = {
-    "n_components": [2, 10, 25],
-    "perplexity": [10, 30, 50],
-    "early_exaggeration": [8, 16],
-    "learning_rate": [100, 300],
+    "n_components": [2],
+    "perplexity": [40],
+    "early_exaggeration": [20],
+    "learning_rate": [200],
     "max_iter": [1000],
 }
 

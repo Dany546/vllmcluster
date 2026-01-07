@@ -120,7 +120,7 @@ def main(args):
     )
     if args.visu:
         # from cluster_visualization import visualize_clusters
-        from project_refactor import project
+        from project import project
 
         # visualize_clusters(args)
         project(args)
@@ -128,7 +128,7 @@ def main(args):
         from evaluate_clusters import KNN
 
         KNN(args)
-    else:
+    else: 
         cluster(args)
 
 
