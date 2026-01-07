@@ -21,21 +21,34 @@ from typing import List, Optional
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+
+# Import local utils robustly (avoid clashing with any installed 'utils' package)
+try:
+    from utils import parse_model_group, color_for_group
+except Exception:
+    import importlib.util, os
+    spec = importlib.util.spec_from_file_location("vllmcluster_utils", os.path.join(os.path.dirname(__file__), "utils.py"))
+    vll_utils = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vll_utils)
+    parse_model_group = vll_utils.parse_model_group
+    color_for_group = vll_utils.color_for_group
 
 
 def get_db_path():
     parser = argparse.ArgumentParser()
     parser.add_argument("--db-path", type=str, default=None)
     parser.add_argument("--local", action="store_true")
-    args = parser.parse_args()
+    # Use parse_known_args to avoid SystemExit when Streamlit passes its own CLI flags
+    args, _ = parser.parse_known_args()
 
     if args.db_path:
         return args.db_path
     if args.local:
         local_path = os.path.expanduser("~/knn_results.db")
         return local_path
-    return "/globalscratch/ucl/irec/darimez/dino/knn_results.db"
+    return "/CECI/home/ucl/irec/darimez/knn_results.db"
 
 
 @st.cache_data
@@ -61,45 +74,214 @@ def make_cell_figure(df: pd.DataFrame,
                      k_values: Optional[List[int]],
                      title: Optional[str],
                      show_legend: bool,
-                     y_range: Optional[List[float]]):
+                     y_range: Optional[List[float]],
+                     plot_style: str = "box",
+                     box_gap: float = 0.05,
+                     box_group_gap: float = 0.02,
+                     marker_size: int = 6,
+                     include_distance_in_group: bool = False,
+                     boxpoints: str = "outliers",
+                     notched: bool = False,
+                     quartilemethod: str = "linear",
+                     highlight_fliers: bool = False,
+                     show_whisker_endpoints: bool = False):
+    """Create a Plotly figure for the given cell with grouping (hue-like) support.
+
+    New features:
+    - Use `offsetgroup` and `legendgroup` so traces that share a group are offset (like hue).
+    - Deterministic color mapping per group via `color_for_group`.
+    - Optional `boxpoints` and `notched` box options for clarity.
+    """
     fig = go.Figure()
     if df.empty or not models:
         fig.add_annotation(text="No data", showarrow=False)
         return fig
 
-    colors = [
-        "#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8",
-        "#F7DC6F", "#BB8FCE", "#85C1E2", "#F8B739", "#52BE80"
-    ]
-
     # ensure k_values is list
     if k_values:
         df = df[df["k"].isin(k_values)]
 
-    for i, model in enumerate(models):
-        sub = df[(df["model_full"] == model) & (df["target"] == target)]
-        if sub.empty:
-            continue
-        fig.add_trace(
-            go.Box(
-                x=sub["k"],
-                y=sub[metric],
-                name=model,
-                marker_color=colors[i % len(colors)],
-                boxmean=True,
-                visible=True,
+    # If no data after filtering, return a message
+    df_target = df[df["target"] == target]
+    if df_target.empty:
+        fig.add_annotation(text="No data for this target", showarrow=False)
+        return fig
+
+    # For categorical placement we map k values to category strings
+    unique_k = sorted(df["k"].unique())
+    k_categories = [str(k) for k in unique_k]
+
+    # Only consider models that actually have data for this target
+    active_models = [m for m in models if not df_target[df_target["model_full"] == m].empty]
+    if not active_models:
+        fig.add_annotation(text="No selected models with data", showarrow=False)
+        return fig
+
+    n_active = len(active_models)
+    # group total width (in x units) per k category; boxes will be placed within [-group_w/2, +group_w/2]
+    group_total_width = min(0.8, 0.8)
+    offset_step = group_total_width / max(1, n_active)
+    width = max(min(offset_step * 0.8, 0.6), 0.02)
+
+    # numeric mapping for k categories to support offsets
+    k_to_idx = {k: idx for idx, k in enumerate(unique_k)}
+
+    for i, model in enumerate(active_models):
+        sub = df_target[df_target["model_full"] == model]
+
+        base, suffix = parse_model_group(model)
+        group_key = model if include_distance_in_group else base
+        color = color_for_group(group_key)
+
+        if plot_style == "box":
+            # numeric x positions with small offsets so boxes are side-by-side
+            offset = (i - (n_active - 1) / 2.0) * offset_step
+            x = sub["k"].map(k_to_idx).astype(float) + offset
+            try:
+                fig.add_trace(
+                    go.Box(
+                        x=x,
+                        y=sub[metric],
+                        name=(model if show_distance_metric else base),
+                        marker_color=color,
+                        boxmean=True,
+                        visible=True,
+                        width=width,
+                        legendgroup=str(group_key),  # group in legend by base model
+                        boxpoints=(boxpoints if boxpoints != "False" else False),
+                        notched=notched,
+                        quartilemethod=quartilemethod,
+                    )
+                )
+            except Exception:
+                # Fallback: older plotly versions may not support some attributes; fall back to non-offset x
+                x_fallback = sub["k"].astype(str)
+                fig.add_trace(
+                    go.Box(
+                        x=x_fallback,
+                        y=sub[metric],
+                        name=(model if show_distance_metric else base),
+                        marker_color=color,
+                        boxmean=True,
+                        visible=True,
+                        width=width,
+                    )
+                )
+
+            # Optionally highlight fliers (outliers) explicitly with scatter markers for clarity
+            try:
+                vals = sub[metric].astype(float)
+                q1 = vals.quantile(0.25)
+                q3 = vals.quantile(0.75)
+                iqr = q3 - q1
+                low_end = q1 - 1.5 * iqr
+                high_end = q3 + 1.5 * iqr
+                outlier_mask = (vals < low_end) | (vals > high_end)
+                whisker_low_val = vals[~outlier_mask].min() if (~outlier_mask).any() else vals.min()
+                whisker_high_val = vals[~outlier_mask].max() if (~outlier_mask).any() else vals.max()
+
+                if highlight_fliers and outlier_mask.any():
+                    # scatter the outliers so they are visible and placed at numeric x positions
+                    x_out = sub["k"].map(k_to_idx).astype(float)[outlier_mask] + offset
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_out,
+                            y=vals[outlier_mask],
+                            mode='markers',
+                            marker=dict(color=color, size=max(4, marker_size - 1), symbol='circle-open'),
+                            name=None,
+                            showlegend=False,
+                            hoverinfo='y',
+                        )
+                    )
+
+                if show_whisker_endpoints:
+                    # add small markers at whisker endpoints for each k (with same offset)
+                    xs = []
+                    ys = []
+                    ks = sorted(sub["k"].unique())
+                    for k in ks:
+                        s_k = sub[sub["k"] == k][metric].astype(float)
+                        if s_k.empty:
+                            continue
+                        q1_k = s_k.quantile(0.25)
+                        q3_k = s_k.quantile(0.75)
+                        iqr_k = q3_k - q1_k
+                        low_k = q1_k - 1.5 * iqr_k
+                        high_k = q3_k + 1.5 * iqr_k
+                        mask_k = (s_k < low_k) | (s_k > high_k)
+                        wl = s_k[~mask_k].min() if (~mask_k).any() else s_k.min()
+                        wh = s_k[~mask_k].max() if (~mask_k).any() else s_k.max()
+                        xs += [k_to_idx[k] + offset, k_to_idx[k] + offset]
+                        ys += [wl, wh]
+                    if xs:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=xs,
+                                y=ys,
+                                mode='markers',
+                                marker=dict(color=color, size=6, symbol='diamond'),
+                                name=None,
+                                showlegend=False,
+                                hoverinfo='y',
+                            )
+                        )
+            except Exception:
+                pass
+        else:  # scatter
+            # map k to sequential numeric positions and add a small deterministic offset per model
+            k_to_idx = {k: idx for idx, k in enumerate(unique_k)}
+            base_x = sub["k"].map(k_to_idx).astype(float)
+            # offset traces so models do not perfectly overlap; deterministic offset based on i
+            offset = (i - (n_active - 1) / 2.0) * 0.08
+            rng = np.random.default_rng(42 + i)
+            jitter = rng.normal(0, 0.02, size=len(base_x))
+            x_pos = base_x + offset + jitter
+            fig.add_trace(
+                go.Scatter(
+                    x=x_pos,
+                    y=sub[metric],
+                    mode='markers',
+                    name=(model if show_distance_metric else base),
+                    marker=dict(color=color, size=marker_size),
+                    visible=True,
+                    legendgroup=str(group_key),
+                )
             )
+
+    # Layout adjustments
+    xaxis = dict(title="k neighbors")
+    if plot_style == "box":
+        # numeric ticks for box plots with offsets: show k values at integer positions
+        xaxis.update(
+            tickmode='array',
+            tickvals=list(range(len(k_categories))),
+            ticktext=k_categories,
+            range=[-0.6, len(k_categories) - 1 + 0.6],
+        )
+    else:
+        # numeric ticks for scatter using index positions but show labels as original k values
+        xaxis.update(
+            tickmode='array',
+            tickvals=list(range(len(k_categories))),
+            ticktext=k_categories,
         )
 
     fig.update_layout(
         title=title or f"{metric.upper()} - {target}",
-        xaxis_title="k neighbors",
+        xaxis=xaxis,
         yaxis_title=metric,
         template="plotly_white",
         boxmode="group",
         height=420,
         showlegend=show_legend,
     )
+
+    # tune box spacing if requested (no effect on scatter)
+    try:
+        fig.update_layout(boxgap=box_gap, boxgroupgap=box_group_gap)
+    except Exception:
+        pass
 
     if y_range and len(y_range) == 2:
         fig.update_yaxes(range=y_range)
@@ -140,13 +322,106 @@ global_k = st.sidebar.multiselect("Global k values", options=k_options, default=
 
 # Available models
 models_all = sorted(df["model_full"].unique().tolist())
-global_models = st.sidebar.multiselect("Global models", options=models_all, default=models_all)
+
+# Session-managed global model selection so buttons can update it
+if "global_models" not in st.session_state:
+    st.session_state["global_models"] = models_all.copy()
+
+# Use a separate widget key to avoid Streamlit blocking session_state updates
+global_models = st.sidebar.multiselect(
+    "Global models",
+    options=models_all,
+    default=st.session_state["global_models"],
+    key="global_models_widget",
+)
+# Keep session state value in sync with widget selection
+if st.session_state.get("global_models") != st.session_state.get("global_models_widget"):
+    st.session_state["global_models"] = st.session_state["global_models_widget"]
+
+# Quick model controls
+if st.sidebar.button("Select all models"):
+    st.session_state["global_models"] = models_all.copy()
+    st.session_state["global_models_widget"] = models_all.copy()
+    st.experimental_rerun()
+if st.sidebar.button("Clear models"):
+    st.session_state["global_models"] = []
+    st.session_state["global_models_widget"] = []
+    st.experimental_rerun()
+
+search_term = st.sidebar.text_input("Select models matching (substring)", value="", key="model_search")
+if st.sidebar.button("Select matching") and search_term:
+    matches = [m for m in models_all if search_term.lower() in m.lower()]
+    st.session_state["global_models"] = matches
+    st.session_state["global_models_widget"] = matches
+    st.experimental_rerun()
+
+# Grouping controls: allow grouping by base model or full name
+# Default: do NOT group runs automatically; user must opt in
+if "group_by_base" not in st.session_state:
+    st.session_state["group_by_base"] = False
+
+group_by_base = st.sidebar.checkbox(
+    "Group runs by base model (merge distance-metric variants)",
+    value=st.session_state["group_by_base"],
+    key="group_by_base",
+    help="When enabled, runs like 'resnet50_l2' and 'resnet50_cos' will be shown as a single group 'resnet50'.",
+)
+
+# Quick actions for grouping
+if st.sidebar.button("Separate all runs"):
+    st.session_state["group_by_base"] = False
+    st.session_state["global_models"] = models_all.copy()
+    st.session_state["global_models_widget"] = models_all.copy()
+    st.experimental_rerun()
+if st.sidebar.button("Group runs by base model"):
+    st.session_state["group_by_base"] = True
+    base_groups = sorted({parse_model_group(m)[0] for m in models_all})
+    st.session_state["global_model_groups"] = base_groups.copy()
+    expanded = [m for m in models_all if parse_model_group(m)[0] in st.session_state["global_model_groups"]]
+    st.session_state["global_models"] = expanded
+    st.session_state["global_models_widget"] = expanded
+    st.experimental_rerun()
+
+# Show whether to include distance metric in display labels (affects titles / legends)
+show_distance_metric = st.sidebar.checkbox("Include distance metric in labels", value=False)
+
+# Show groups multiselect to select groups instead of individual models (optional)
+base_groups = sorted({parse_model_group(m)[0] for m in models_all})
+if group_by_base:
+    # default groups selected is all groups
+    if "global_model_groups" not in st.session_state:
+        st.session_state["global_model_groups"] = base_groups.copy()
+    selected_groups = st.sidebar.multiselect("Select model groups", options=base_groups, default=st.session_state["global_model_groups"], key="global_model_groups")
+    if st.sidebar.button("Apply groups"):
+        # expand selected groups into concrete models
+        expanded = [m for m in models_all if parse_model_group(m)[0] in selected_groups]
+        st.session_state["global_models"] = expanded
+        st.session_state["global_models_widget"] = expanded
+st.sidebar.write("Model groups (color)")
+current_groups = sorted({parse_model_group(m)[0] if group_by_base else m for m in st.session_state["global_models"]})
+cols = st.sidebar.columns(2)
+for i, g in enumerate(current_groups):
+    color = color_for_group(g)
+    st.sidebar.markdown(f"- <span style='display:inline-block;width:12px;height:12px;background:{color};margin-right:6px;border-radius:2px;'></span> `{g}`", unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 st.sidebar.write("Per-cell fallbacks (cells override when non-empty)")
 global_metric = st.sidebar.selectbox("Global metric", options=["corr", "mae", "r2"], index=0)
 global_target = st.sidebar.selectbox("Global target", options=sorted(df["target"].unique().tolist()), index=0)
 global_query = st.sidebar.text_input("Global trace filter (substring)", value="", help="Case-insensitive substring to filter traces")
+
+# Plot style & spacing controls (help keep boxes compact when k values are sparse)
+global_plot_style = st.sidebar.selectbox("Default plot style", options=["box", "scatter"], index=0)
+box_gap = st.sidebar.slider("Box gap (between boxes)", min_value=0.0, max_value=0.5, value=0.05, step=0.01, help="Gap between boxes of adjacent k values; smaller -> tighter")
+box_group_gap = st.sidebar.slider("Box group gap (between groups)", min_value=0.0, max_value=0.5, value=0.02, step=0.01, help="Gap between groups of boxes (per model)")
+marker_size = st.sidebar.slider("Scatter marker size", min_value=2, max_value=20, value=6, step=1)
+
+# Box visual options
+boxpoints = st.sidebar.selectbox("Box points", options=["outliers", "all", "suspectedoutliers", "False"], index=0)
+notched = st.sidebar.checkbox("Notched boxes", value=False)
+quartilemethod = st.sidebar.selectbox("Quartile method", options=["linear", "inclusive", "exclusive"], index=0)
+highlight_fliers = st.sidebar.checkbox("Highlight fliers (explicit points)", value=True)
+show_whisker_endpoints = st.sidebar.checkbox("Show whisker endpoints", value=False)
 
 # Presets (simple in-session)
 if "knn_presets" not in st.session_state:
@@ -226,6 +501,7 @@ else:
 
                     title = st.text_input(f"Title (cell {cell_idx+1})", value="", key=f"title_{cell_idx}")
                     show_legend = st.checkbox(f"Show legend (cell {cell_idx+1})", value=False, key=f"legend_{cell_idx}")
+                    chosen_plot = st.selectbox(f"Plot style (cell {cell_idx+1})", options=["(use global)", "box", "scatter"], index=0, key=f"plot_{cell_idx}")
                     y_min = st.number_input(f"Y min (cell {cell_idx+1})", value=float('nan'), key=f"ymin_{cell_idx}")
                     y_max = st.number_input(f"Y max (cell {cell_idx+1})", value=float('nan'), key=f"ymax_{cell_idx}")
 
@@ -241,9 +517,38 @@ else:
                     q = global_query.lower()
                     effective_models = [m for m in effective_models if q in m.lower() or q in m.split("_")[0].lower()]
 
+                # determine effective plot style (per-cell override -> global)
+                effective_plot = chosen_plot if chosen_plot != "(use global)" else global_plot_style
+
                 # build and show figure
-                fig = make_cell_figure(df, effective_models, effective_target, effective_metric, effective_k or None, effective_title, show_legend, [y_min, y_max] if (not pd.isna(y_min) and not pd.isna(y_max)) else None)
-                st.plotly_chart(fig, use_container_width=True)
+                fig = make_cell_figure(
+                    df,
+                    effective_models,
+                    effective_target,
+                    effective_metric,
+                    effective_k or None,
+                    effective_title,
+                    show_legend,
+                    [y_min, y_max] if (not pd.isna(y_min) and not pd.isna(y_max)) else None,
+                    plot_style=effective_plot,
+                    box_gap=box_gap,
+                    box_group_gap=box_group_gap,
+                    marker_size=marker_size,
+                    include_distance_in_group=(not group_by_base),
+                    boxpoints=boxpoints,
+                    notched=notched,
+                    quartilemethod=quartilemethod,
+                    highlight_fliers=highlight_fliers,
+                    show_whisker_endpoints=show_whisker_endpoints,
+                )
+                # Provide a unique key per cell to avoid StreamlitDuplicateElementId
+                chart_key = f"knn_figure_cell_{cell_idx}"
+                try:
+                    st.plotly_chart(fig, use_container_width=True, key=chart_key)
+                except Exception as e:
+                    # In rare cases Streamlit may still complain about duplicate IDs; fall back to a uuid-based key
+                    import uuid
+                    st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_{uuid.uuid4().hex}")
 
                 # exports
                 html, png = fig_to_downloads(fig)
