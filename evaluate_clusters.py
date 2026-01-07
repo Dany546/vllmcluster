@@ -6,6 +6,7 @@ from time import time
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 from sklearn.metrics import (
     accuracy_score,
     adjusted_rand_score,
@@ -19,7 +20,7 @@ from utils import get_logger, load_distances, load_embeddings
 
 import wandb
 
-DB_PATH = "/globalscratch/ucl/irec/darimez/dino/knn_results.db"
+DB_PATH = "/CECI/home/ucl/irec/darimez/knn_results.db"
 
 
 def init_db():
@@ -49,9 +50,9 @@ def init_db():
             distance_metric TEXT,
             fold INTEGER,
             target TEXT,
-            mae REAL,
+            "mae/accuracy" REAL,
             r2 REAL,
-            corr REAL,
+            "correlation/ARI" REAL,
             PRIMARY KEY(model, k, random_state, num_folds, cv_type, distance_metric, fold, target)
         )
     """)
@@ -131,7 +132,7 @@ def insert_record(record, c):
 
 
 def get_lower_dim_tables():
-    db_path = f"/globalscratch/ucl/irec/darimez/dino/proj/"
+    db_path = f"/CECI/home/ucl/irec/darimez/proj/"
     lower_dim_tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
@@ -189,9 +190,10 @@ def get_lower_dim_tables():
 def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    targets = ["hit_freq", "mean_iou", "flag_supercat"]
+    # Base targets available for most runs
+    base_targets = ["hit_freq", "mean_iou", "flag_supercat", "box_loss", "cls_loss", "dfl_loss"]
     n_components = [2, 10, 50]
-    k_targ = list(itertools.product(neighbor_grid, targets, n_components))
+
     tasks = {}  # list of (table_name, k)
     lower_dim_names, lower_dim_tables = get_lower_dim_tables()
     table_names = [
@@ -210,24 +212,31 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
             # YOLO models remain singletons
             table_pairs = [table_name]
 
-        k_targ_per_table = itertools.product(k_targ, table_pairs)
-        for (k, target, n_component), table_pair in k_targ_per_table:
-            other_columns = {"target": target, "n_components": n_component}
-            if not already_computed(
-                table_pair, k, RN, num_folds, "kfold", distance_metric, other_columns, c
-            ):
-                tasks.setdefault(table_name, []).append(
-                    (
-                        table_pair,
-                        k,
-                        RN,
-                        num_folds,
-                        "kfold",
-                        distance_metric,
-                        n_component,
-                        target, # must always be last arg
+        for table_pair in table_pairs:
+            # Determine targets for this specific table_pair. Only include seg_loss when
+            # the run name indicates segmentation (e.g., contains '-seg'). This avoids
+            # scheduling seg_loss tasks for detection-only runs.
+            targets_for_pair = base_targets.copy()
+            if "-seg" in table_pair:
+                targets_for_pair.append("seg_loss")
+
+            for k, target, n_component in itertools.product(neighbor_grid, targets_for_pair, n_components):
+                other_columns = {"target": target, "n_components": n_component}
+                if not already_computed(
+                    table_pair, k, RN, num_folds, "kfold", distance_metric, other_columns, c
+                ):
+                    tasks.setdefault(table_name, []).append(
+                        (
+                            table_pair,
+                            k,
+                            RN,
+                            num_folds,
+                            "kfold",
+                            distance_metric,
+                            n_component,
+                            target, # must always be last arg
+                        )
                     )
-                )
     conn.close()
     return tasks
 
@@ -308,13 +317,13 @@ def work_fn(args):
                 "distance_metric": distance_metric,
                 "fold": fold_id,
                 "target": target_name,
-                "mae": accuracy_score(y_test, y_pred)
+                "mae/accuracy": accuracy_score(y_test, y_pred)
                 if categorical_target
                 else mean_absolute_error(y_test, y_pred),
                 "r2": r2_score(y_test, y_pred),
-                "corr": adjusted_rand_score(y_test, y_pred)
+                "corr/ARI": adjusted_rand_score(y_test, y_pred)
                 if categorical_target
-                else np.corrcoef(y_test, y_pred)[0, 1],
+                else spearmanr(y_test, y_pred)[0],
             }
             records.append(record)
             success = insert_record(record, c)
@@ -338,22 +347,41 @@ def process_table(args_list, results, table_path, table_name):
         "flag_cat": cats,
         "flag_supercat": supercats,
     }
-    distances = load_distances(table_path.replace("embeddings", "distances"))
+    distances = X # load_distances(table_path.replace("embeddings", "distances"))
     # Use pre-generated deterministic fold indices for consistency
     folds = get_fold_indices(n_splits=args_list[0][3], random_state=42)
 
     new_args_list = []
     for args in args_list:
         new_args = list(args)
-        if "_" in args[0]:  # need target error from other models
-            root = os.path.dirname(table_path)
-            other_targ = load_embeddings(
-                os.path.join(root, f"{args[0].split('.')[0].split('_')[1]}.db"),
-                args[-1],
-            )[args[-1]].values
-            new_args = [other_targ] + new_args + [folds]
-        else:
-            new_args = [targets[args[-1]]] + new_args + [folds]
+        try:
+            if "_" in args[0]:  # need target error from other models
+                root = os.path.dirname(table_path)
+                other_targ = load_embeddings(
+                    os.path.join(root, f"{args[0].split('.')[0].split('_')[1]}.db"),
+                    args[-1],
+                )[args[-1]].values
+                new_args = [other_targ] + new_args + [folds]
+            else:
+                target_name = args[-1]
+                if target_name in targets:
+                    targ_arr = targets[target_name]
+                else:
+                    # Try to load the target column directly from the embeddings DB (e.g., box_loss, cls_loss, dfl_loss, seg_loss)
+                    df_single = load_embeddings(table_path, query=target_name)
+                    if isinstance(df_single, pd.DataFrame) and target_name in df_single.columns:
+                        targ_arr = df_single[target_name].values
+                    else:
+                        # If a Series or single-column returned, squeeze it
+                        try:
+                            targ_arr = df_single.squeeze().values
+                        except Exception:
+                            raise RuntimeError(f"Target column '{target_name}' not found in {table_path}")
+                new_args = [targ_arr] + new_args + [folds]
+        except Exception as e:
+            # If a target column is missing for this table, skip this task and warn
+            print(f"Skipping task for table {table_name} due to missing target: {e}")
+            continue
         if "." in args[0]:  # need embeddings from projections
             path = table_path.replace("embeddings", "proj")
             path = "/".join(path.split("/")[:-1])
@@ -383,11 +411,15 @@ def plot_results(df):
     df.drop(columns=["distance_metric"], inplace=True)
 
     grid = {
-        "target": ["hit_freq", "mean_iou", "mean_conf", "cats", "supercats"],
+        "target": ["hit_freq", "mean_iou", "mean_conf", "box_loss", "cls_loss", "dfl_loss", "seg_loss", "cats", "supercats"],
         "target_name": [
             "Hit Frequency",
             "Mean IoU",
             "Mean Confidence",
+            "Box Loss",
+            "Classification Loss",
+            "DFL Loss",
+            "Segmentation Loss",
             "Categories",
             "Super Categories",
         ],
@@ -478,13 +510,40 @@ def plot_results(df):
 
 
 def KNN(args):
-    db_path = f"/globalscratch/ucl/irec/darimez/dino/embeddings/"
-    tables = [
+    db_path = f"/CECI/home/ucl/irec/darimez/embeddings"
+    logger = get_logger(args.debug)
+    all_tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
         if file.endswith(".db")
     ]  # extend as needed
-    logger = get_logger(args.debug)
+
+    # If user provided specific table(s) via CLI, filter down the table list.
+    if getattr(args, "table", None):
+        requested = [t.strip() for t in args.table.split(",") if t.strip()]
+        tables = []
+        for req in requested:
+            # Allow absolute paths to .db files or basenames (with or without .db)
+            if os.path.isabs(req) and req.endswith(".db") and os.path.exists(req):
+                tables.append(req)
+            else:
+                bn = req.split(".")[0]
+                matches = [t for t in all_tables if os.path.basename(t).split(".")[0] == bn]
+                if matches:
+                    tables.extend(matches)
+                else:
+                    candidate = os.path.join(db_path, req if req.endswith(".db") else req + ".db")
+                    if os.path.exists(candidate):
+                        tables.append(candidate)
+                    else:
+                        logger.warning(f"Requested table {req} not found in {db_path}")
+    else:
+        tables = all_tables
+
+    if len(tables) == 0:
+        logger.info("No tables to process (filtered by --table). Exiting.")
+        return
+
     if not args.debug:
         run = wandb.init(
             entity="miro-unet",

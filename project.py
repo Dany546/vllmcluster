@@ -29,6 +29,28 @@ from tqdm import tqdm
 EMBEDDINGS_DIR = "/globalscratch/ucl/irec/darimez/dino/embeddings/"
 PROJ_DB_DIR = "/CECI/home/ucl/irec/darimez" # "/globalscratch/ucl/irec/darimez/dino/proj/"
 METRICS_DB = os.path.join(PROJ_DB_DIR, "metrics.db")
+
+def _executemany_with_retry(cur, conn, query, rows, retries=8, base_delay=0.1):
+    """Execute `executemany` with retries on transient sqlite locking/busy errors."""
+    import time
+    logger = logging.getLogger(__name__)
+    for attempt in range(retries):
+        try:
+            cur.executemany(query, rows)
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "database is locked" in msg or "database is busy" in msg:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"SQLite busy/locked, retrying in {delay:.2f}s (attempt {attempt+1}/{retries}): {e}")
+                time.sleep(delay)
+                continue
+            raise
+    # Final attempt (let it raise if it fails)
+    cur.executemany(query, rows)
+    conn.commit()
+
 # Global storage for worker initialization
 _worker_X = None
 _worker_model_name = None
@@ -128,18 +150,18 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
         rows.append((int(i), run_id, vec_blob))
         
         if len(rows) >= 128:
-            cur.executemany(
-                "INSERT OR REPLACE INTO embeddings(id, run_id, vector) VALUES (?, ?, ?)",
-                rows,
+            query = (
+                "INSERT OR REPLACE INTO embeddings(id, run_id, vector) VALUES (?, ?, ?)"
             )
+            _executemany_with_retry(cur, conn, query, rows)
             rows = []
             conn.commit()
 
     if len(rows) > 0:
-        cur.executemany(
-            "INSERT OR REPLACE INTO embeddings(id, run_id, vector) VALUES (?, ?, ?)",
-            rows
+        query = (
+            "INSERT OR REPLACE INTO embeddings(id, run_id, vector) VALUES (?, ?, ?)"
         )
+        _executemany_with_retry(cur, conn, query, rows)
         conn.commit()
 
     # Insert metadata with n_components
@@ -222,6 +244,8 @@ def compute_and_store_metrics(model_name, data, db_path=""):
     ids, hfs, mious, mconfs, cats, supercats = data
 
     conn = sqlite3.connect(os.path.join(db_path, f"metrics.db"))
+    # Give SQLite a reasonable busy timeout to reduce transient lock errors
+    conn.execute("PRAGMA busy_timeout = 5000")
     cur = conn.cursor()
 
     # Ensure table exists with dynamic category/supercategory columns
@@ -272,16 +296,14 @@ def compute_and_store_metrics(model_name, data, db_path=""):
             INSERT OR IGNORE INTO metrics(model, img_id, hit_freq, mean_iou, mean_conf,
                                 {cat_cols}, {super_cols}) VALUES ({placeholders})
             """
-            cur.executemany(query, rows)
+            _executemany_with_retry(cur, conn, query, rows)
             rows = []
-            conn.commit()
         rows.append(values)
 
     if len(rows) > 0:
         query = f"""INSERT OR IGNORE INTO metrics(model, img_id, hit_freq, mean_iou, mean_conf,
                             {cat_cols}, {super_cols}) VALUES ({placeholders})"""
-        cur.executemany(query, rows)
-        conn.commit()
+        _executemany_with_retry(cur, conn, query, rows)
     conn.close()
 
 
@@ -294,7 +316,7 @@ def get_tasks(all_hyperparams, model_name):
         )
         # Check if run_id already exists in metadata
         conn = sqlite3.connect(
-            os.path.join("/globalscratch/ucl/irec/darimez/dino/proj2/", f"{algo}.db")
+            os.path.join("/CECI/home/ucl/irec/darimez/proj", f"{algo}.db")
         )
         cur = conn.cursor()
         cols = ", ".join(
@@ -312,6 +334,7 @@ def get_tasks(all_hyperparams, model_name):
         if exists is None:
             tasks.append(hyperparam)
         else:
+            logging.info(f"Projection already exists for {model_name} with params {hyperparam}")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS embeddings (
                     id INTEGER,
@@ -326,25 +349,27 @@ def get_tasks(all_hyperparams, model_name):
             exists = count[0] == 5000 if count else False 
             if not exists:
                 tasks.append(hyperparam)
+            else:
+                logging.info(f"Projection is complete")
         conn.close()
     return tasks
 
 
 def project(args):
-    db_path = "/globalscratch/ucl/irec/darimez/dino/embeddings/"
+    db_path = "/CECI/home/ucl/irec/darimez/embeddings/"
     tables = [
         os.path.join(db_path, f) for f in os.listdir(db_path) if f.endswith(".db")
     ]
     logger = get_logger(args.debug)
 
-    db_path = "/globalscratch/ucl/irec/darimez/dino/proj2/"
+    db_path = "/CECI/home/ucl/irec/darimez/proj"
     umap_params = {
         "n_components": [2, 10, 25],
         "n_neighbors": [10, 20, 50, 100],
         "min_dist": [0.0, 0.1, 0.5], 
     }
     tsne_params = {
-        "n_components": [10, 25],
+        "n_components": [2, 10, 25],
         "perplexity": [40],
         "early_exaggeration": [20],
         "learning_rate": [200],
@@ -359,8 +384,8 @@ def project(args):
             d["algo"] = algo
             yield d
 
-    # all_hyperparams = list(expand_params(umap_params, "umap")) 
-    all_hyperparams = list(
+    all_hyperparams = list(expand_params(umap_params, "umap"))
+    all_hyperparams += list(
         expand_params(tsne_params, "tsne")
     )
     # Clean up failed/incomplete entries
@@ -385,7 +410,7 @@ def project(args):
         conn.commit()
         conn.close()
 
-    for table in tables:
+    for table in tables[6:]:
         model_name = os.path.basename(table).split(".")[0]
         logger.debug(f"Processing {model_name}")
 
@@ -400,8 +425,7 @@ def project(args):
             exists = False
         conn.close()
         if exists:
-            logger.info(f"Loading existing metrics for model {model_name}")
-            continue
+            logger.info(f"Metrics already exist for model {model_name}")
         else:
             logger.info(f"Saving metrics for model {model_name}")
             ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)

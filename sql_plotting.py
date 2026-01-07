@@ -28,6 +28,12 @@ def log_plot_plotly(
     continuous_cols=None,  # single continuous column
     title="Embedding Visualization",
     colorscale="Viridis",
+    subtitle: str = None,  # short text to show under the title (e.g., hyperparams)
+    # Optional short labels and full params for hover
+    umap_short: str = None,
+    tsne_short: str = None,
+    umap_params_full: str = None,
+    tsne_params_full: str = None,
 ):
     """
     Interactive embedding visualization:
@@ -90,9 +96,41 @@ def log_plot_plotly(
         )
 
     # Foreground traces (initial: categorical if available else continuous)
-    def add_foreground(idx, emb):
+    def add_foreground(idx, emb, run_short=None, run_params=None):
+        # Pretty-format params into HTML-friendly multi-line string
+        def _format_params(p):
+            if p is None:
+                return None
+            # If dict, pretty-print
+            if isinstance(p, dict):
+                pretty = json.dumps(p, indent=2, sort_keys=True)
+            else:
+                # try parse JSON string
+                try:
+                    parsed = json.loads(p)
+                    pretty = json.dumps(parsed, indent=2, sort_keys=True)
+                except Exception:
+                    pretty = str(p)
+            # convert newlines to <br> for HTML hover
+            return pretty.replace("\n", "<br>")
+
+        def _append_run_info(base_template, run_short, run_params):
+            parts = []
+            if run_short:
+                parts.append(f"Run: {run_short}")
+            params_html = _format_params(run_params)
+            if params_html:
+                parts.append("Params:")
+                parts.append(params_html)
+            if parts:
+                # join with <br> for multiple lines
+                return base_template.replace("<extra></extra>", "<br>" + "<br>".join(parts) + "<extra></extra>")
+            return base_template
+
         if class_cols and class_cols in df.columns:
             # categorical init
+            base = "x: %{x}<br>y: %{y}<br>Class: %{customdata}<extra></extra>"
+            hover = _append_run_info(base, run_short, run_params)
             fig.add_trace(
                 go.Scattergl(
                     x=emb[:, 0],
@@ -100,14 +138,16 @@ def log_plot_plotly(
                     mode="markers",
                     marker=dict(size=FG_SIZE, color=df[class_col], opacity=0.9),
                     customdata=df[class_col],
-                    hovertemplate="x: %{x}<br>y: %{y}<br>Class: %{customdata}<extra></extra>",
-                    name="Classes",
+                    hovertemplate=hover,
+                    name=(run_short if run_short else "Classes"),
                     showlegend=True,
                 ),
                 row=1,
                 col=idx,
             )
         elif superclass_col and superclass_col in df.columns:
+            base = "x: %{x}<br>y: %{y}<br>Superclass: %{customdata}<extra></extra>"
+            hover = _append_run_info(base, run_short, run_params)
             fig.add_trace(
                 go.Scattergl(
                     x=emb[:, 0],
@@ -115,8 +155,8 @@ def log_plot_plotly(
                     mode="markers",
                     marker=dict(size=FG_SIZE, color=df[superclass_col], opacity=0.9),
                     customdata=df[superclass_col],
-                    hovertemplate="x: %{x}<br>y: %{y}<br>Superclass: %{customdata}<extra></extra>",
-                    name="Superclasses",
+                    hovertemplate=hover,
+                    name=(run_short if run_short else "Superclasses"),
                     showlegend=True,
                 ),
                 row=1,
@@ -124,6 +164,8 @@ def log_plot_plotly(
             )
         elif continuous_col and continuous_col in df.columns:
             vals = df[continuous_col].values
+            base = f"x: %{{x}}<br>y: %{{y}}<br>{continuous_col}: %{{customdata}}<extra></extra>"
+            hover = _append_run_info(base, run_short, run_params)
             fig.add_trace(
                 go.Scattergl(
                     x=emb[:, 0],
@@ -140,15 +182,16 @@ def log_plot_plotly(
                         cmax=float(np.nanmax(vals)),
                     ),
                     customdata=vals,
-                    hovertemplate=f"x: %{{x}}<br>y: %{{y}}<br>{continuous_col}: %{{customdata}}<extra></extra>",
-                    name=continuous_col,
-                    showlegend=False,
+                    hovertemplate=hover,
+                    name=(run_short if run_short else continuous_col),
+                    showlegend=True,
                 ),
                 row=1,
                 col=idx,
             )
         else:
-            # fallback: single color
+            base = "x: %{x}<br>y: %{y}<br>Idx: %{customdata}<extra></extra>"
+            hover = _append_run_info(base, run_short, run_params)
             fig.add_trace(
                 go.Scattergl(
                     x=emb[:, 0],
@@ -156,9 +199,9 @@ def log_plot_plotly(
                     mode="markers",
                     marker=dict(size=FG_SIZE, color="steelblue", opacity=0.9),
                     customdata=np.arange(n),
-                    hovertemplate="x: %{x}<br>y: %{y}<br>Idx: %{customdata}<extra></extra>",
-                    name="Points",
-                    showlegend=False,
+                    hovertemplate=hover,
+                    name=(run_short if run_short else "Points"),
+                    showlegend=True,
                 ),
                 row=1,
                 col=idx,
@@ -287,5 +330,81 @@ def log_plot_plotly(
         ],
         margin=dict(l=40, r=40, t=60, b=60),
     )
+
+    # Optional subtitle (annotation) - useful to show hyperparameters used for UMAP/t-SNE
+    if subtitle:
+        # place just above the plot area, centered
+        fig.add_annotation(
+            dict(
+                text=subtitle,
+                x=0.5,
+                y=1.03,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(size=10, color="#444"),
+                xanchor="center",
+            )
+        )
+
+    # Optional: full params annotation + in-figure ℹ️ toggle (only if full params provided)
+    if umap_params_full or tsne_params_full:
+        def _pp_html(p):
+            if p is None:
+                return ""
+            if isinstance(p, dict):
+                pretty = json.dumps(p, indent=2, sort_keys=True)
+            else:
+                try:
+                    pretty = json.dumps(json.loads(p), indent=2, sort_keys=True)
+                except Exception:
+                    pretty = str(p)
+            return pretty.replace("\n", "<br>")
+
+        umap_html = _pp_html(umap_params_full)
+        tsne_html = _pp_html(tsne_params_full)
+        full_html = f"<b>UMAP params</b><br>{umap_html}<br><b>t-SNE params</b><br>{tsne_html}"
+
+        # add hidden annotation (will be toggled via updatemenu)
+        fig.add_annotation(
+            dict(
+                text=full_html,
+                x=0.99,
+                y=1.03,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                align="left",
+                bgcolor="rgba(255,255,255,0.95)",
+                bordercolor="#ddd",
+                borderwidth=1,
+                font=dict(size=10, color="#222", family="monospace"),
+                visible=False,
+                xanchor="right",
+            )
+        )
+
+        # compute index of the newly added annotation
+        ann_idx = len(fig.layout.annotations) - 1
+
+        # build show/hide buttons and append as a new updatemenu
+        show_btn = dict(label="ℹ️ Params", method="relayout", args=[{f"annotations[{ann_idx}].visible": True}])
+        hide_btn = dict(label="✖ Hide", method="relayout", args=[{f"annotations[{ann_idx}].visible": False}])
+
+        # Preserve existing updatemenus and append new one
+        existing = list(fig.layout.updatemenus) if fig.layout.updatemenus else []
+        existing.append(
+            dict(
+                buttons=[show_btn, hide_btn],
+                direction="left",
+                showactive=False,
+                x=0.99,
+                y=1.08,
+                xanchor="right",
+                yanchor="top",
+                pad=dict(t=0, r=0),
+            )
+        )
+        fig.update_layout(updatemenus=existing)
 
     return fig

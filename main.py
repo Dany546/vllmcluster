@@ -158,6 +158,11 @@ def parse_args():
         help="Train KNN for conformable predictions",
     )
     parser.add_argument(
+        "--table",
+        default=None,
+        help="Comma-separated list of table basenames or full paths to run KNN on (optional). If provided, only these tables will be processed.",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="perform all steps, will override other flags if set",

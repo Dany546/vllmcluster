@@ -87,12 +87,15 @@ def load_embeddings(db_path, query: Optional[str] = None):
             conn,
         )
         df = pd.read_sql_query(
-            f"SELECT x,y FROM embeddings WHERE run_id='{query}' ORDER BY id",
+            f"SELECT vector FROM embeddings WHERE run_id='{query}' ORDER BY id",
             conn,
+        )
+        df["vector"] = df["vector"].apply(
+            lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
         )
         conn.close()
         df.pop("run_id")
-        return df[["x", "y"]].values
+        return df["vector"].values
     else:
         if query is None:
             df = pd.read_sql_query("SELECT * FROM embeddings ORDER BY img_id", conn)
@@ -100,7 +103,6 @@ def load_embeddings(db_path, query: Optional[str] = None):
                 lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
             )
             conn.close()
-            print(len(df["img_id"].values))
             return (
                 df["img_id"].values,
                 np.concatenate(df["embedding"].values),
@@ -111,6 +113,7 @@ def load_embeddings(db_path, query: Optional[str] = None):
                 df["flag_supercat"].values,
             )
         else:
+            print("Loading query from:", db_path, "query:", query)
             df = pd.read_sql_query(
                 f"SELECT {query} FROM embeddings ORDER BY img_id", conn
             )
@@ -149,3 +152,165 @@ def load_distances(db_path):
     dist_matrix[i_idx, j_idx] = d_vals
     dist_matrix[j_idx, i_idx] = d_vals
     return dist_matrix
+
+
+# -----------------------------
+# Hyperparameter query helpers
+# -----------------------------
+
+def parse_hyperparam_query(query: str):
+    """
+    Parse a simple hyperparameter query string into a list of filters.
+
+    Supported examples:
+      "n_neighbors=20,min_dist>0.1"
+      "perplexity:40"
+      "min_dist>=0.1"
+
+    Returns:
+      list of (key, op, value) tuples where op is one of ('>=','<=','>','<','=','==',':')
+    """
+    if not query:
+        return []
+
+    # Normalize separators and split tokens
+    tokens = [t.strip() for t in query.replace(";", ",").split(",") if t.strip()]
+
+    ops = [">=", "<=", ">", "<", "==", "=", ":"]
+    filters = []
+
+    for token in tokens:
+        matched = False
+        for op in ops:
+            if op in token:
+                key, val = token.split(op, 1)
+                key = key.strip()
+                val = val.strip()
+                # Try to interpret value as JSON (so numbers/bools/null become native types)
+                try:
+                    val_parsed = json.loads(val)
+                except Exception:
+                    # Fallback: try float then keep as string
+                    try:
+                        val_parsed = float(val)
+                    except Exception:
+                        val_parsed = val
+                filters.append((key, op, val_parsed))
+                matched = True
+                break
+        if not matched:
+            # No operator: treat as existence/equality true
+            filters.append((token, "=", True))
+
+    return filters
+
+
+def match_hyperparams(params: dict, filters):
+    """Return True if params dict satisfies all filters produced by parse_hyperparam_query."""
+    if not filters:
+        return True
+
+    for key, op, val in filters:
+        if key not in params:
+            return False
+        pval = params[key]
+
+        # Coerce numeric-like strings to numbers for comparisons when possible
+        try:
+            if isinstance(pval, str) and pval.replace(".", "", 1).isdigit():
+                pval_num = float(pval)
+            else:
+                pval_num = pval
+        except Exception:
+            pval_num = pval
+
+        # Equality
+        if op in ("=", "==", ":"):
+            if pval != val:
+                return False
+        else:
+            # For inequality operators, attempt numeric comparison
+            try:
+                if op == ">":
+                    if not (float(pval_num) > float(val)):
+                        return False
+                elif op == "<":
+                    if not (float(pval_num) < float(val)):
+                        return False
+                elif op == ">=":
+                    if not (float(pval_num) >= float(val)):
+                        return False
+                elif op == "<=":
+                    if not (float(pval_num) <= float(val)):
+                        return False
+            except Exception:
+                return False
+
+    return True
+
+
+# -----------------------------
+# Model grouping & color helpers
+# -----------------------------
+
+def parse_model_group(model_full: str):
+    """Parse a model string into (base_model, distance_metric_or_suffix).
+
+    Examples:
+      'resnet50_l2' -> ('resnet50', 'l2')
+      'yolov8s-seg' -> ('yolov8s-seg', None)
+      'clip' -> ('clip', None)
+    The heuristic splits on the LAST underscore. If no underscore, returns the full name as base.
+    """
+    if not isinstance(model_full, str):
+        return model_full, None
+    if "_" in model_full:
+        base, suffix = model_full.rsplit("_", 1)
+        return base, suffix
+    return model_full, None
+
+
+def _hsl_to_hex(h: float, s: float = 60.0, l: float = 55.0):
+    """Convert HSL values (degrees, percent, percent) to hex color string."""
+    # convert to [0,1]
+    h = float(h) % 360.0
+    s = float(s) / 100.0
+    l = float(l) / 100.0
+
+    c = (1 - abs(2 * l - 1)) * s
+    x = c * (1 - abs(((h / 60.0) % 2) - 1))
+    m = l - c / 2
+
+    if 0 <= h < 60:
+        r1, g1, b1 = c, x, 0
+    elif 60 <= h < 120:
+        r1, g1, b1 = x, c, 0
+    elif 120 <= h < 180:
+        r1, g1, b1 = 0, c, x
+    elif 180 <= h < 240:
+        r1, g1, b1 = 0, x, c
+    elif 240 <= h < 300:
+        r1, g1, b1 = x, 0, c
+    else:
+        r1, g1, b1 = c, 0, x
+
+    r = int((r1 + m) * 255)
+    g = int((g1 + m) * 255)
+    b = int((b1 + m) * 255)
+
+    return "#{:02x}{:02x}{:02x}".format(r, g, b)
+
+
+def color_for_group(group_name: str):
+    """Deterministically map a group name to a hex color.
+
+    Uses a hash of the group name to choose a hue (0-360). Returns hex string.
+    """
+    if group_name is None:
+        return "#888888"
+    # stable hash
+    try:
+        h = int(hashlib.sha256(group_name.encode()).hexdigest()[:8], 16) % 360
+    except Exception:
+        h = abs(hash(group_name)) % 360
+    return _hsl_to_hex(h, s=60.0, l=55.0)
