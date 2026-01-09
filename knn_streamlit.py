@@ -309,6 +309,42 @@ if df.empty:
     st.stop()
 
 
+@st.cache_data
+def load_proj_metadata(proj_dir: str = "/CECI/home/ucl/irec/darimez/proj") -> pd.DataFrame:
+    """Load projection run metadata (umap/tsne) if available.
+
+    Returns a DataFrame with at least columns: run_id, model, algo, n_components (when present) and any extra params.
+    """
+    runs = []
+    for algo in ["umap", "tsne"]:
+        dbfile = os.path.join(proj_dir, f"{algo}.db")
+        if not os.path.exists(dbfile):
+            continue
+        try:
+            conn = sqlite3.connect(dbfile)
+            dfm = pd.read_sql("SELECT * FROM metadata", conn)
+            conn.close()
+            if dfm.empty:
+                continue
+            dfm["algo"] = algo
+            # normalize column for n_components if present
+            if "n_components" in dfm.columns:
+                # ensure numeric
+                try:
+                    dfm["n_components"] = pd.to_numeric(dfm["n_components"], errors="coerce")
+                except Exception:
+                    pass
+            runs.append(dfm)
+        except Exception:
+            continue
+    if not runs:
+        return pd.DataFrame()
+    return pd.concat(runs, ignore_index=True)
+
+
+proj_meta = load_proj_metadata()
+
+
 st.sidebar.header("Layout & Global Filters")
 n_rows = st.sidebar.number_input("Grid rows", min_value=1, max_value=4, value=1)
 n_cols = st.sidebar.number_input("Grid cols", min_value=1, max_value=4, value=2)
@@ -320,23 +356,49 @@ page = st.sidebar.radio("Page", options=["Grid", "Statistics"], index=0)
 k_options = sorted(df["k"].unique().tolist())
 global_k = st.sidebar.multiselect("Global k values", options=k_options, default=k_options)
 
-# Available models
+# Projection-based N-components filter (if metadata found)
+if not proj_meta.empty:
+    ncomp_options = sorted(proj_meta["n_components"].dropna().unique().astype(int).tolist())
+else:
+    ncomp_options = []
+
+include_unknown_ncomp = st.sidebar.checkbox("Include runs without n_components metadata", value=True)
+selected_ncomps = st.sidebar.multiselect("Filter runs by n_components", options=ncomp_options, default=ncomp_options if ncomp_options else [])
+                
+
+# Available models (apply Ncomp filter when selected)
 models_all = sorted(df["model_full"].unique().tolist())
+if selected_ncomps and not proj_meta.empty:
+    def _get_model_ncomp(model_name: str):
+        # try exact match then substring match
+        m = proj_meta.loc[proj_meta["run_id"] == model_name]
+        if m.empty:
+            m = proj_meta.loc[proj_meta["run_id"].apply(lambda r: r in str(model_name) or str(model_name) in str(r))]
+        if m.empty:
+            return None
+        return m.iloc[0].get("n_components", None)
+
+    filtered = []
+    for m in models_all:
+        n = _get_model_ncomp(m)
+        if n is None:
+            if include_unknown_ncomp:
+                filtered.append(m)
+        else:
+            try:
+                if int(n) in selected_ncomps:
+                    filtered.append(m)
+            except Exception:
+                # keep if parsing fails and user opted to include unknowns
+                if include_unknown_ncomp:
+                    filtered.append(m)
+    models_all = filtered
+else:
+    models_all = sorted(df["model_full"].unique().tolist())
 
 # Session-managed global model selection so buttons can update it
 if "global_models" not in st.session_state:
     st.session_state["global_models"] = models_all.copy()
-
-# Use a separate widget key to avoid Streamlit blocking session_state updates
-global_models = st.sidebar.multiselect(
-    "Global models",
-    options=models_all,
-    default=st.session_state["global_models"],
-    key="global_models_widget",
-)
-# Keep session state value in sync with widget selection
-if st.session_state.get("global_models") != st.session_state.get("global_models_widget"):
-    st.session_state["global_models"] = st.session_state["global_models_widget"]
 
 # Quick model controls
 if st.sidebar.button("Select all models"):
@@ -385,6 +447,8 @@ if st.sidebar.button("Group runs by base model"):
 # Show whether to include distance metric in display labels (affects titles / legends)
 show_distance_metric = st.sidebar.checkbox("Include distance metric in labels", value=False)
 
+# (Global models multiselect will be created after group-selection widgets)
+
 # Show groups multiselect to select groups instead of individual models (optional)
 base_groups = sorted({parse_model_group(m)[0] for m in models_all})
 if group_by_base:
@@ -405,8 +469,105 @@ for i, g in enumerate(current_groups):
     st.sidebar.markdown(f"- <span style='display:inline-block;width:12px;height:12px;background:{color};margin-right:6px;border-radius:2px;'></span> `{g}`", unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
+# Show n_components / proj hyperparams for selected runs (if available)
+if not proj_meta.empty:
+    sel_models = st.session_state.get("global_models", [])
+    meta_rows = []
+    for m in sel_models:
+        match = proj_meta.loc[proj_meta["run_id"] == m]
+        if match.empty:
+            # try substring heuristic
+            match = proj_meta.loc[proj_meta["run_id"].apply(lambda r: r in str(m) or str(m) in str(r))]
+        if match.empty:
+            meta_rows.append({"model": m, "n_components": None, "algo": None})
+        else:
+            row = match.iloc[0]
+            ncomp = row.get("n_components", None)
+            try:
+                ncomp = int(ncomp) if pd.notnull(ncomp) else None
+            except Exception:
+                pass
+            meta_rows.append({"model": m, "n_components": ncomp, "algo": row.get("algo", None)})
+    if meta_rows:
+        st.sidebar.write("Selected runs metadata (projection)")
+        st.sidebar.dataframe(pd.DataFrame(meta_rows), use_container_width=True)
+
+    # --- Advanced hyperparameter run filter ---
+    st.sidebar.markdown("### Advanced run filter")
+    # n_components filter (if projection metadata is available)
+    ncomp_choice = []
+    if not proj_meta.empty:
+        ncomp_choice = st.sidebar.multiselect("n_components (projection)", options=ncomp_options, default=[])
+
+    # Projection / table filter (derived from model_full format '<run>.<proj>.<id>')
+    proj_options = sorted({m.split('.')[1] for m in models_all if '.' in m})
+    proj_choice = st.sidebar.multiselect("Projection / table", options=proj_options, default=[])
+
+    # Model substring filter
+    model_pattern = st.sidebar.text_input("Model substring (case-insensitive)", value="")
+
+    # Combine mode: AND (all) vs OR (any)
+    combine_or = st.sidebar.checkbox("Combine filters with OR (match any)", value=False)
+
+    if st.sidebar.button("Apply hyperparameter filter"):
+        def _resolve_ncomp(mname: str):
+            if proj_meta.empty:
+                return None
+            m = proj_meta.loc[proj_meta["run_id"] == mname]
+            if m.empty:
+                m = proj_meta.loc[proj_meta["run_id"].apply(lambda r: r in str(mname) or str(mname) in str(r))]
+            if m.empty:
+                return None
+            try:
+                val = m.iloc[0].get("n_components", None)
+                return int(val) if pd.notnull(val) else None
+            except Exception:
+                return None
+
+        matches = []
+        for m in models_all:
+            checks = []
+            if ncomp_choice:
+                nval = _resolve_ncomp(m)
+                checks.append(nval in ncomp_choice)
+            if proj_choice:
+                proj_name = m.split('.')[1] if '.' in m else ''
+                checks.append(proj_name in proj_choice)
+            if model_pattern:
+                checks.append(model_pattern.lower() in m.lower())
+
+            if not checks:
+                continue
+            if combine_or:
+                if any(checks):
+                    matches.append(m)
+            else:
+                if all(checks):
+                    matches.append(m)
+
+        if matches:
+            st.session_state["global_models"] = matches
+            st.session_state["global_models_widget"] = matches
+            st.experimental_rerun()
+
+    if st.sidebar.button("Clear hyperparameter filters"):
+        st.session_state["global_models"] = models_all.copy()
+        st.session_state["global_models_widget"] = models_all.copy()
+        st.experimental_rerun()
+
+    # Global models multiselect (placed after filters so programmatic writes succeed)
+    global_models = st.sidebar.multiselect(
+        "Global models",
+        options=models_all,
+        default=st.session_state.get("global_models", models_all.copy()),
+        key="global_models_widget",
+    )
+    # Keep session state value in sync with widget selection
+    if st.session_state.get("global_models") != st.session_state.get("global_models_widget"):
+        st.session_state["global_models"] = st.session_state["global_models_widget"]
+
 st.sidebar.write("Per-cell fallbacks (cells override when non-empty)")
-global_metric = st.sidebar.selectbox("Global metric", options=["corr", "mae", "r2"], index=0)
+global_metric = st.sidebar.selectbox("Global metric", options=["correlation/ARI", "mae/accuracy", "r2", "error_dist_corr"], index=0)
 global_target = st.sidebar.selectbox("Global target", options=sorted(df["target"].unique().tolist()), index=0)
 global_query = st.sidebar.text_input("Global trace filter (substring)", value="", help="Case-insensitive substring to filter traces")
 
@@ -455,8 +616,9 @@ if page == "Statistics":
     st.write("### Data Summary")
     st.dataframe(
         df_summary.groupby(["model", "target", "k"]).agg({
-            "corr": ["mean", "std"],
-            "mae": ["mean", "std"],
+            "correlation/ARI": ["mean", "std"],
+                "mae/accuracy": ["mean", "std"],
+                "error_dist_corr": ["mean", "std"],
             "r2": ["mean", "std"],
         }).round(4),
         use_container_width=True
@@ -487,7 +649,7 @@ else:
 
                     chosen_metric = st.selectbox(
                         f"Metric (cell {cell_idx+1})",
-                        options=["(use global)", "corr", "mae", "r2"],
+                        options=["(use global)", "correlation/ARI", "mae/accuracy", "r2", "error_dist_corr"],
                         index=0,
                         key=f"metric_{cell_idx}"
                     )
