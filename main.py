@@ -163,6 +163,16 @@ def parse_args():
         help="Comma-separated list of table basenames or full paths to run KNN on (optional). If provided, only these tables will be processed.",
     )
     parser.add_argument(
+        "--model_filter",
+        default=None,
+        help="Comma-separated substrings to filter which model pairs to run KNN on (e.g., 'yolov11x-seg')",
+    )
+    parser.add_argument(
+        "--targets",
+        default=None,
+        help="Comma-separated list of targets to run (e.g., 'mean_iou,cls_loss,seg_loss')",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="perform all steps, will override other flags if set",

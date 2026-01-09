@@ -75,8 +75,13 @@ def get_logger(debug):
 
 
 def load_embeddings(db_path, query: Optional[str] = None):
-    conn = sqlite3.connect(db_path)
-    print("Loading embeddings from", db_path)
+    # Open DB in read-only mode to avoid creating journal/wal files on
+    # read-only or network-mounted filesystems which can cause "disk I/O error".
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+    except Exception:
+        # Fallback to default (may raise same error which will be handled by caller)
+        conn = sqlite3.connect(db_path)
     table_name = db_path.split("/")[-1].split(".")[0]
     if table_name in ["umap", "tsne"]:
         query = query.split(".")
@@ -94,8 +99,8 @@ def load_embeddings(db_path, query: Optional[str] = None):
             lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
         )
         conn.close()
-        df.pop("run_id")
-        return df["vector"].values
+        # convert array-of-1xD rows into (n, D) matrix
+        return np.concatenate(df["vector"].values, axis=0)
     else:
         if query is None:
             df = pd.read_sql_query("SELECT * FROM embeddings ORDER BY img_id", conn)
@@ -103,17 +108,22 @@ def load_embeddings(db_path, query: Optional[str] = None):
                 lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
             )
             conn.close()
+            # Build losses dict (may be missing for some runs)
+            losses = {}
+            for key in ("box_loss", "cls_loss", "dfl_loss", "seg_loss"):
+                losses[key] = df[key].values if key in df.columns else None
+
             return (
                 df["img_id"].values,
                 np.concatenate(df["embedding"].values),
-                df["hit_freq"].values,
-                df["mean_iou"].values,
-                df["mean_conf"].values,
-                df["flag_cat"].values,
-                df["flag_supercat"].values,
+                df["hit_freq"].values if "hit_freq" in df.columns else None,
+                df["mean_iou"].values if "mean_iou" in df.columns else None,
+                df["mean_conf"].values if "mean_conf" in df.columns else None,
+                df["flag_cat"].values if "flag_cat" in df.columns else None,
+                df["flag_supercat"].values if "flag_supercat" in df.columns else None,
+                losses,
             )
         else:
-            print("Loading query from:", db_path, "query:", query)
             df = pd.read_sql_query(
                 f"SELECT {query} FROM embeddings ORDER BY img_id", conn
             )
@@ -121,12 +131,18 @@ def load_embeddings(db_path, query: Optional[str] = None):
                 df["embedding"] = df["embedding"].apply(
                     lambda b: np.frombuffer(b, dtype=np.float32).reshape(1, -1)
                 )
+                # If embedding column requested, return (n, D) matrix
+                conn.close()
+                return np.concatenate(df["embedding"].values, axis=0)
             conn.close()
             return df
 
 
 def load_distances(db_path):
-    conn = sqlite3.connect(db_path)
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+    except Exception:
+        conn = sqlite3.connect(db_path)
     df = pd.read_sql_query("SELECT i, j, distance FROM distances ORDER BY i, j", conn)
     conn.close()
     rows = df[["i", "j", "distance"]].values  # or cursor.fetchall() if you prefer

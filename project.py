@@ -358,7 +358,8 @@ def get_tasks(all_hyperparams, model_name):
 def project(args):
     db_path = "/CECI/home/ucl/irec/darimez/embeddings/"
     tables = [
-        os.path.join(db_path, f) for f in os.listdir(db_path) if f.endswith(".db")
+        os.path.join(db_path, f) for f in os.listdir(db_path)
+        if f.endswith(".db") and not f=='attention.db'
     ]
     logger = get_logger(args.debug)
 
@@ -410,7 +411,7 @@ def project(args):
         conn.commit()
         conn.close()
 
-    for table in tables[6:]:
+    for table in tables:
         model_name = os.path.basename(table).split(".")[0]
         logger.debug(f"Processing {model_name}")
 
@@ -428,7 +429,7 @@ def project(args):
             logger.info(f"Metrics already exist for model {model_name}")
         else:
             logger.info(f"Saving metrics for model {model_name}")
-            ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
+            ids, X, hfs, mious, mconfs, cats, supercats, _ = load_embeddings(table)
             data = (ids, hfs, mious, mconfs, cats, supercats)
             compute_and_store_metrics(model_name, data, db_path=db_path)
 
@@ -507,7 +508,7 @@ def project(args):
             logger.info("Running projections sequentially") 
             for task in tqdm(tasks, total=len(tasks), desc="Projections", unit="task"):
                 if X is None:
-                    ids, X, hfs, mious, mconfs, cats, supercats = load_embeddings(table)
+                    ids, X, hfs, mious, mconfs, cats, supercats, _ = load_embeddings(table)
                 compute_and_store(
                     X,
                     model_name,

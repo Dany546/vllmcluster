@@ -3,6 +3,16 @@ import sqlite3
 import types
 import numpy as np
 import pytest
+import importlib.util
+import sys
+from pathlib import Path
+
+# Ensure local vllmcluster/utils.py satisfies top-level `utils` imports in the module under test
+utils_path = Path(__file__).resolve().parents[1] / "utils.py"
+spec = importlib.util.spec_from_file_location("utils", str(utils_path))
+utils_mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(utils_mod)
+sys.modules["utils"] = utils_mod
 
 import vllmcluster.evaluate_clusters as evalc
 
@@ -66,8 +76,8 @@ def small_embeddings(monkeypatch):
     hfs = rng.rand(N)
     mious = rng.rand(N)
     mconfs = rng.rand(N)
-    cats = rng.integers(0, 2, size=N)
-    supercats = rng.integers(0, 2, size=N)
+    cats = rng.randint(0, 2, size=N)
+    supercats = rng.randint(0, 2, size=N)
 
     def _loader(path, query=None):
         # process_table expects load_embeddings(table_path) -> ids, X, hfs, mious, mconfs, cats, supercats

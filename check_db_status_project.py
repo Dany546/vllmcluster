@@ -303,7 +303,7 @@ def main():
         return
 
     # Gather model names from embedding DBs
-    tables = [os.path.join(emb_dir, f) for f in os.listdir(emb_dir) if f.endswith(".db")]
+    tables = [os.path.join(emb_dir, f) for f in os.listdir(emb_dir) if f.endswith(".db") and not f=="attention.db"]
     if not tables:
         print("No embedding .db files found in embedding dir")
         return
