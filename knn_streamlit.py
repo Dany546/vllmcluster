@@ -20,6 +20,29 @@ import base64
 from typing import List, Optional
 
 import streamlit as st
+# Compatibility shim: some Streamlit builds expose `experimental_rerun`,
+# others rely on raising `RerunException` from the runtime. Ensure
+# `st.experimental_rerun()` exists so the rest of the code can call it.
+if not hasattr(st, "experimental_rerun"):
+    try:
+        from streamlit.runtime.scriptrunner import RerunException
+
+        def _st_experimental_rerun() -> None:
+            raise RerunException()
+
+        st.experimental_rerun = _st_experimental_rerun
+    except Exception:
+        # Fallback: set a session flag and stop execution. This does not
+        # perfectly mimic Streamlit's rerun behavior but avoids AttributeError.
+        def _st_experimental_rerun() -> None:
+            st.session_state["_rerun_requested"] = True
+            try:
+                st.stop()
+            except Exception:
+                # If st.stop() is not available for some reason, raise to abort.
+                raise RuntimeError("Requested rerun but Streamlit runtime does not support it")
+
+        st.experimental_rerun = _st_experimental_rerun
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -290,6 +313,35 @@ def make_cell_figure(df: pd.DataFrame,
 
 
 def fig_to_downloads(fig: go.Figure):
+    # sanitize any invalid axis ranges (NaN / infinite) that can break the
+    # frontend when Plotly serializes the figure
+    try:
+        import math
+        layout_json = fig.layout.to_plotly_json()
+        for key, val in layout_json.items():
+            # keys like 'yaxis', 'yaxis2', etc.
+            if key.startswith("yaxis") and isinstance(val, dict):
+                r = val.get("range")
+                if r and isinstance(r, (list, tuple)):
+                    bad = False
+                    for v in r:
+                        try:
+                            if not (isinstance(v, (int, float)) and math.isfinite(v)):
+                                bad = True
+                                break
+                        except Exception:
+                            bad = True
+                            break
+                    if bad:
+                        # clear ranges for all y axes to let Plotly autoscale
+                        try:
+                            fig.update_yaxes(range=None)
+                        except Exception:
+                            pass
+                        break
+    except Exception:
+        pass
+
     html = fig.to_html(full_html=False, include_plotlyjs='cdn')
     try:
         png = fig.to_image(format="png")

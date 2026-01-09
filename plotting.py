@@ -14,7 +14,7 @@ from matplotlib.colors import ListedColormap
 from plotly.subplots import make_subplots
 from sklearn.manifold import TSNE
 from umap import UMAP  # GPU versions
-from utils import dict_to_filename, get_lookups, table_exists
+from utils import dict_to_filename, get_lookups, table_exists, load_embeddings
 
 import wandb
 
@@ -491,3 +491,89 @@ def log_plot_plotly(
     )
 
     return fig
+
+
+def find_2d_run_ids(proj_db_path):
+    """Return list of run_ids in a projections DB that have 2-dimensional vectors.
+
+    Strategy:
+    - Prefer `metadata.params` JSON and check `n_components`.
+    - Otherwise, inspect a single `vector` blob from `embeddings` to infer dimensionality.
+    """
+    if not os.path.exists(proj_db_path):
+        raise FileNotFoundError(proj_db_path)
+    conn = sqlite3.connect(f"file:{proj_db_path}?mode=ro", uri=True)
+    cur = conn.cursor()
+    run_ids = []
+    # Try metadata with JSON params
+    try:
+        cur.execute("SELECT run_id, params FROM metadata")
+        for run_id, params in cur.fetchall():
+            try:
+                if params:
+                    p = json.loads(params)
+                    if int(p.get("n_components", 0)) == 2:
+                        run_ids.append(run_id)
+            except Exception:
+                continue
+    except Exception:
+        # metadata missing or not parseable
+        pass
+
+    # If none found via metadata, inspect vectors directly
+    if not run_ids:
+        try:
+            cur.execute("SELECT DISTINCT run_id FROM embeddings")
+            candidates = [r[0] for r in cur.fetchall()]
+            for rid in candidates:
+                try:
+                    cur.execute("SELECT vector FROM embeddings WHERE run_id=? LIMIT 1", (rid,))
+                    row = cur.fetchone()
+                    if not row or row[0] is None:
+                        continue
+                    arr = np.frombuffer(row[0], dtype=np.float32)
+                    if arr.size == 2:
+                        run_ids.append(rid)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    conn.close()
+    return run_ids
+
+
+def load_2d_projection_df(proj_db_path, run_id, prefix="proj"):
+    """Load a 2D projection (from `embeddings.vector`) and return a DataFrame with columns `{prefix}_x`, `{prefix}_y`.
+
+    Assumes vectors are stored as float32 blobs.
+    """
+    if not os.path.exists(proj_db_path):
+        raise FileNotFoundError(proj_db_path)
+    conn = sqlite3.connect(f"file:{proj_db_path}?mode=ro", uri=True)
+    try:
+        df = pd.read_sql_query(
+            "SELECT vector FROM embeddings WHERE run_id=? ORDER BY id",
+            conn,
+            params=(run_id,),
+        )
+    except Exception:
+        # fallback to vec_projections schema
+        try:
+            df = pd.read_sql_query(
+                "SELECT vector FROM vec_projections WHERE run_id=? ORDER BY id",
+                conn,
+                params=(run_id,),
+            )
+        except Exception as e:
+            conn.close()
+            raise
+    conn.close()
+    if df.empty:
+        raise RuntimeError(f"No vectors found for run_id {run_id} in {proj_db_path}")
+    # decode blobs into (n,2) array
+    vectors = [np.frombuffer(b, dtype=np.float32) for b in df["vector"].values]
+    mat = np.stack(vectors, axis=0)
+    if mat.shape[1] != 2:
+        raise RuntimeError(f"Projection for run {run_id} is not 2D (shape={mat.shape})")
+    out_df = pd.DataFrame({f"{prefix}_x": mat[:, 0], f"{prefix}_y": mat[:, 1]})
+    return out_df
