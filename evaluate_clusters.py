@@ -765,159 +765,160 @@ def KNN(args):
         for file in os.listdir(db_path)
         if file.endswith(".db") and not file=='attention.db'
     ]  # extend as needed
-
-    # If user provided specific table(s) via CLI, filter down the table list.
-    if getattr(args, "table", None):
-        logger.debug(f"Filtering tables based on --table: {args.table}")  # DEBUG
-        requested = [t.strip() for t in args.table.split(",") if t.strip()]
-        tables = []
-        for req in requested:
-            # Allow absolute paths to .db files or basenames (with or without .db)
-            if os.path.isabs(req) and req.endswith(".db") and os.path.exists(req):
-                tables.append(req)
-            else:
-                bn = req.split(".")[0]
-                matches = [t for t in all_tables if os.path.basename(t).split(".")[0] == bn]
-                if matches:
-                    tables.extend(matches)
+    if True:
+        # If user provided specific table(s) via CLI, filter down the table list.
+        if getattr(args, "table", None):
+            logger.debug(f"Filtering tables based on --table: {args.table}")  # DEBUG
+            requested = [t.strip() for t in args.table.split(",") if t.strip()]
+            tables = []
+            for req in requested:
+                # Allow absolute paths to .db files or basenames (with or without .db)
+                if os.path.isabs(req) and req.endswith(".db") and os.path.exists(req):
+                    tables.append(req)
                 else:
-                    candidate = os.path.join(db_path, req if req.endswith(".db") else req + ".db")
-                    if os.path.exists(candidate):
-                        tables.append(candidate)
+                    bn = req.split(".")[0]
+                    matches = [t for t in all_tables if os.path.basename(t).split(".")[0] == bn]
+                    if matches:
+                        tables.extend(matches)
                     else:
-                        logger.warning(f"Requested table {req} not found in {db_path}")
-    else:
-        tables = all_tables
+                        candidate = os.path.join(db_path, req if req.endswith(".db") else req + ".db")
+                        if os.path.exists(candidate):
+                            tables.append(candidate)
+                        else:
+                            logger.warning(f"Requested table {req} not found in {db_path}")
+        else:
+            tables = all_tables
 
-    if len(tables) == 0:
-        logger.info("No tables to process (filtered by --table). Exiting.")
-        return
+        if len(tables) == 0:
+            logger.info("No tables to process (filtered by --table). Exiting.")
+            return
 
-    if not args.debug:
-        run = wandb.init(
-            entity="miro-unet",
-            project="VLLM clustering",
-            # mode="offline",
-            name=f"visu",  # optional descriptive name
+        if not args.debug:
+            run = wandb.init(
+                entity="miro-unet",
+                project="VLLM clustering",
+                # mode="offline",
+                name=f"visu",  # optional descriptive name
+            )
+        else:
+            class wandb_mockup:
+                def log(self, *args, **kwargs):
+                    pass 
+                def finish(self):
+                    pass
+            run = wandb_mockup()
+
+        init_db()
+
+        neighbor_grid = [5, 10, 15, 20, 30, 50]
+        # Use fixed random seed for determinism across all hyperparameter combinations
+        RN = 42
+        num_folds = 10
+        distance_metric = "euclidean"
+        # Allow narrowing the grid to a subset of models via CLI: --model_filter "yolov11x-seg,other"
+        model_filter = None
+        if getattr(args, "model_filter", None):
+            model_filter = [m.strip() for m in args.model_filter.split(",") if m.strip()]
+            logger.info(f"Applying model filter: {model_filter}")
+        # Allow selecting which targets to run via CLI: --targets "mean_iou,cls_loss"
+        target_filter = None
+        if getattr(args, "targets", None):
+            target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
+            logger.info(f"Applying target filter: {target_filter}")
+
+        # Debug: report discovered embedding DBs and table selection
+        logger.debug(f"Found {len(all_tables)} embedding DB files in {db_path}")
+        logger.debug(f"Tables after --table filter: {len(tables)}")
+        logger.debug(f"Model filter: {model_filter}; Target filter: {target_filter}")
+
+        tasks = get_tasks(
+            tables,
+            neighbor_grid,
+            RN,
+            num_folds,
+            distance_metric,
+            model_filter=model_filter,
+            target_filter=target_filter,
         )
-    else:
-        class wandb_mockup:
-            def log(self, *args, **kwargs):
-                pass 
-            def finish(self):
-                pass
-        run = wandb_mockup()
-
-    init_db()
-
-    neighbor_grid = [5, 10, 15, 20, 30, 50]
-    # Use fixed random seed for determinism across all hyperparameter combinations
-    RN = 42
-    num_folds = 10
-    distance_metric = "euclidean"
-    # Allow narrowing the grid to a subset of models via CLI: --model_filter "yolov11x-seg,other"
-    model_filter = None
-    if getattr(args, "model_filter", None):
-        model_filter = [m.strip() for m in args.model_filter.split(",") if m.strip()]
-        logger.info(f"Applying model filter: {model_filter}")
-    # Allow selecting which targets to run via CLI: --targets "mean_iou,cls_loss"
-    target_filter = None
-    if getattr(args, "targets", None):
-        target_filter = [t.strip() for t in args.targets.split(",") if t.strip()]
-        logger.info(f"Applying target filter: {target_filter}")
-
-    # Debug: report discovered embedding DBs and table selection
-    logger.debug(f"Found {len(all_tables)} embedding DB files in {db_path}")
-    logger.debug(f"Tables after --table filter: {len(tables)}")
-    logger.debug(f"Model filter: {model_filter}; Target filter: {target_filter}")
-
-    tasks = get_tasks(
-        tables,
-        neighbor_grid,
-        RN,
-        num_folds,
-        distance_metric,
-        model_filter=model_filter,
-        target_filter=target_filter,
-    )
-    total_tasks = sum(len(v) for v in tasks.values())
-    logger.info(f"Total KNN tasks to process: {total_tasks}")
-    
-    # Debug: per-table task counts
-    for tn, lst in tasks.items():
-        logger.debug(f"Tasks scheduled for {tn}: {len(lst)}")
-    if total_tasks > 0:
-        records = []
-
-        # Create a global progress bar across all scheduled tasks so we can
-        # estimate remaining time. `tasks` maps table_name -> list of task tuples.
         total_tasks = sum(len(v) for v in tasks.values())
-        pbar = tqdm(total=total_tasks, desc="KNN tasks", unit="task")
+        logger.info(f"Total KNN tasks to process: {total_tasks}")
+        
+        # Debug: per-table task counts
+        for tn, lst in tasks.items():
+            logger.debug(f"Tasks scheduled for {tn}: {len(lst)}")
+        if total_tasks > 0:
+            records = []
 
-        for table in tables:
-            # Start a new wandb run per model
-            table_name = table.split("/")[-1].split(".")[0]
-            if table_name not in tasks.keys():
-                continue
-            else:
-                logger.info(
-                    f"Computing {len(tasks[table_name])} rows for table {table_name}"
-                )
-            process_table(tasks[table_name], records, table, table_name, pbar=pbar)
+            # Create a global progress bar across all scheduled tasks so we can
+            # estimate remaining time. `tasks` maps table_name -> list of task tuples.
+            total_tasks = sum(len(v) for v in tasks.values())
+            pbar = tqdm(total=total_tasks, desc="KNN tasks", unit="task")
 
-        try:
-            pbar.close()
-        except Exception:
-            pass
-    else:
-        # No tasks scheduled — provide diagnostic info to help the user debug
-        logger.warning("No KNN tasks were scheduled.")
-        if model_filter:
-            # Check whether results already exist in DB for the requested filters
-            conn_check = sqlite3.connect(DB_PATH)
-            c_check = conn_check.cursor()
-            for mf in model_filter:
-                c_check.execute(
-                    "SELECT COUNT(*) FROM knn_results WHERE model LIKE ?", (f"%{mf}%",)
-                )
-                cnt = c_check.fetchone()[0]
-                logger.info(f"Existing results matching '{mf}': {cnt}")
-            conn_check.close()
-        logger.info("Possible reasons: filters matched no models, targets were filtered out, or results already exist in the DB.")
-        # If no records were produced, verify whether this is because results
-        # already exist in the DB. If not, raise so callers can debug the
-        # unexpected skip (records should not be empty in normal execution).
-        if len(records) == 0:
-            expected_models = list(tasks.keys())
-            if len(expected_models) > 0:
+            for table in tables:
+                # Start a new wandb run per model
+                table_name = table.split("/")[-1].split(".")[0]
+                if table_name not in tasks.keys():
+                    continue
+                else:
+                    logger.info(
+                        f"Computing {len(tasks[table_name])} rows for table {table_name}"
+                    )
+                process_table(tasks[table_name], records, table, table_name, pbar=pbar)
+
+            try:
+                pbar.close()
+            except Exception:
+                pass
+        else:
+            # No tasks scheduled — provide diagnostic info to help the user debug
+            logger.warning("No KNN tasks were scheduled.")
+            if model_filter:
+                # Check whether results already exist in DB for the requested filters
                 conn_check = sqlite3.connect(DB_PATH)
                 c_check = conn_check.cursor()
-                placeholders = ",".join(["?"] * len(expected_models))
-                c_check.execute(
-                    f"SELECT COUNT(*) FROM knn_results WHERE model IN ({placeholders})",
-                    expected_models,
-                )
-                cnt_existing = c_check.fetchone()[0]
-                conn_check.close()
-                if cnt_existing == 0:
-                    raise RuntimeError(
-                        "No records were produced for requested tasks and no existing results "
-                        "found in knn_results. This indicates tasks were skipped unexpectedly."
+                for mf in model_filter:
+                    c_check.execute(
+                        "SELECT COUNT(*) FROM knn_results WHERE model LIKE ?", (f"%{mf}%",)
                     )
-        records = pd.DataFrame(
-            data=[record.values() for record in records], columns=list(records[0].keys())
-        )
-        run.log(
-            {
-                "new_results": wandb.Table(
-                    data=records.values.tolist(),
-                    columns=list(records.columns),
-                )
-            }
-        )
-    return
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM knn_results ORDER BY model", conn)
-    conn.close()
-    fig = plot_results(df)
-    run.log({"plot": fig})
+                    cnt = c_check.fetchone()[0]
+                    logger.info(f"Existing results matching '{mf}': {cnt}")
+                conn_check.close()
+            logger.info("Possible reasons: filters matched no models, targets were filtered out, or results already exist in the DB.")
+            # If no records were produced, verify whether this is because results
+            # already exist in the DB. If not, raise so callers can debug the
+            # unexpected skip (records should not be empty in normal execution).
+            if len(records) == 0:
+                expected_models = list(tasks.keys())
+                if len(expected_models) > 0:
+                    conn_check = sqlite3.connect(DB_PATH)
+                    c_check = conn_check.cursor()
+                    placeholders = ",".join(["?"] * len(expected_models))
+                    c_check.execute(
+                        f"SELECT COUNT(*) FROM knn_results WHERE model IN ({placeholders})",
+                        expected_models,
+                    )
+                    cnt_existing = c_check.fetchone()[0]
+                    conn_check.close()
+                    if cnt_existing == 0:
+                        raise RuntimeError(
+                            "No records were produced for requested tasks and no existing results "
+                            "found in knn_results. This indicates tasks were skipped unexpectedly."
+                        )
+            records = pd.DataFrame(
+                data=[record.values() for record in records], columns=list(records[0].keys())
+            )
+            run.log(
+                {
+                    "new_results": wandb.Table(
+                        data=records.values.tolist(),
+                        columns=list(records.columns),
+                    )
+                }
+            )
+    else:
+        for table in tables:
+            conn = sqlite3.connect(DB_PATH)
+            df = pd.read_sql_query("SELECT * FROM knn_results ORDER BY model", conn)
+            conn.close()
+            fig = plot_results(df)
+            run.log({"plot": fig})
