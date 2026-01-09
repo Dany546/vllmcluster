@@ -1,12 +1,16 @@
 import logging
 import sqlite3
 from pydoc import classify_class_attrs
+import io
+import json
+import time
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from cfg import cat_to_super, device
 from model import CLIP, DINO
+from typing import List
 from typing_extensions import Optional, Tuple
 from ultralytics import YOLO
 from ultralytics.utils.nms import non_max_suppression
@@ -60,6 +64,59 @@ def compute_dice_score(pred_masks, gt_masks):
     
     dice = (2.0 * intersection) / (union + 1e-6)
     return dice.mean()
+
+
+def array_to_blob(array: np.ndarray) -> bytes:
+    """Serialize a numpy array to raw bytes (float32).
+
+    This is suitable for storing fixed-shape float arrays in a BLOB column.
+    """
+    return array.astype(np.float32).tobytes()
+
+
+def blob_to_array(blob: bytes, dtype=np.float32) -> np.ndarray:
+    """Deserialize raw bytes back to a numpy array with given dtype."""
+    return np.frombuffer(blob, dtype=dtype)
+
+
+def tensors_to_heads_blob(tensors: List[torch.Tensor], compress: bool = True):
+    """Serialize a list of tensors (heads) into a compressed binary blob
+    and return metadata (shapes, dtypes).
+
+    Returns
+    -------
+    blob: bytes
+        Compressed binary blob containing all heads (npz)
+    shapes_json: str
+        JSON list of shapes for each head
+    dtypes_json: str
+        JSON list of dtypes for each head
+    """
+    np_arrays = []
+    shapes = []
+    dtypes = []
+    for t in tensors:
+        a = t.detach().cpu().numpy()
+        np_arrays.append(a.astype(np.float32))
+        shapes.append(list(a.shape))
+        dtypes.append(str(a.dtype))
+    buf = io.BytesIO()
+    savez_kwargs = {f"h{i}": arr for i, arr in enumerate(np_arrays)}
+    if compress:
+        np.savez_compressed(buf, **savez_kwargs)
+    else:
+        np.savez(buf, **savez_kwargs)
+    blob = buf.getvalue()
+    buf.close()
+    return blob, json.dumps(shapes), json.dumps(dtypes)
+
+
+def heads_blob_to_tensors(blob: bytes) -> List[torch.Tensor]:
+    """Deserialize a compressed heads blob back to a list of tensors."""
+    buf = io.BytesIO(blob)
+    with np.load(buf, allow_pickle=False) as npz:
+        arrays = [npz[f] for f in npz.files]
+    return [torch.from_numpy(a) for a in arrays]
 
 
 class yolowrapper(torch.nn.Module):
@@ -344,6 +401,126 @@ class yolowrapper(torch.nn.Module):
 
         return embeddings, final_preds, all
 
+    def predict_and_store_raw(
+        self,
+        images: torch.Tensor,
+        img_ids,
+        emb_conn: sqlite3.Connection,
+        model_name: str,
+        batch_base: int = 0,
+        compress: bool = True,
+        insert_batch: int = 128,
+    ):
+        """Run the model to capture raw head outputs and store them in DB.
+
+        This function is resilient to several ultralytics return formats:
+        - If the underlying model returns per-head batched tensors (list of tensors
+          each shaped [B,...]) we split them per-image.
+        - If it returns a per-image iterable, we accept that.
+
+        Args:
+            images: input batch tensor [B,C,H,W]
+            img_ids: iterable of image ids (len == B)
+            emb_conn: sqlite3.Connection to embeddings DB
+            model_name: identifier string for the model
+            batch_base: offset for global indexing (not used here but kept for API)
+            compress: whether to compress head blobs
+            insert_batch: rows per DB transaction
+        """
+        self.model.eval()
+        cur = emb_conn.cursor()
+        B = images.shape[0]
+        with torch.no_grad():
+            try:
+                raw_out = self.model.model(images)
+            except Exception:
+                raw_out = self.model(images)
+
+        try:
+            pooled = torch.cat([m.features for m in self.detection_layer_entry], dim=1)
+            pooled = pooled.detach().cpu()
+        except Exception:
+            pooled = None
+
+        rows = []
+        for i in range(B):
+            img_id = int(img_ids[i]) if hasattr(img_ids[i], "__int__") else int(img_ids[i])
+
+            head_tensors = None
+            try:
+                if isinstance(raw_out, (list, tuple)) and all(
+                    isinstance(t, torch.Tensor) and t.shape[0] == B for t in raw_out
+                ):
+                    head_tensors = [t.detach().cpu()[i] for t in raw_out]
+                elif isinstance(raw_out, (list, tuple)) and len(raw_out) == B:
+                    candidate = raw_out[i]
+                    if isinstance(candidate, (list, tuple)):
+                        head_tensors = [
+                            torch.as_tensor(x).detach().cpu()
+                            if not isinstance(x, torch.Tensor)
+                            else x.detach().cpu()
+                            for x in candidate
+                        ]
+                    elif isinstance(candidate, torch.Tensor):
+                        head_tensors = [candidate.detach().cpu()]
+                    else:
+                        head_tensors = [torch.as_tensor(candidate).detach().cpu()]
+                elif isinstance(raw_out, torch.Tensor) and raw_out.shape[0] == B:
+                    head_tensors = [raw_out.detach().cpu()[i]]
+                else:
+                    layer_heads = []
+                    for m in self.detection_layer_entry:
+                        if hasattr(m, "pred") and isinstance(m.pred, torch.Tensor):
+                            layer_heads.append(m.pred.detach().cpu())
+                    if len(layer_heads) > 0 and all(h.shape[0] == B for h in layer_heads):
+                        head_tensors = [h[i] for h in layer_heads]
+            except Exception:
+                head_tensors = None
+
+            if head_tensors is None:
+                continue
+
+            head_blob, shapes_json, dtypes_json = tensors_to_heads_blob(head_tensors, compress=compress)
+            anchors_info = json.dumps({})
+            features_blob = None
+            if pooled is not None:
+                try:
+                    feat_arr = pooled[i].numpy().astype(np.float32)
+                    features_blob = array_to_blob(feat_arr)
+                except Exception:
+                    features_blob = None
+
+            created_ts = int(time.time())
+            rows.append(
+                (
+                    img_id,
+                    model_name,
+                    head_blob,
+                    shapes_json,
+                    dtypes_json,
+                    anchors_info,
+                    features_blob,
+                    created_ts,
+                )
+            )
+
+            if len(rows) >= insert_batch:
+                cur.executemany(
+                    "INSERT OR REPLACE INTO predictions_raw_heads (img_id, model_name, head_blob, head_shapes, head_dtypes, anchors_info, features, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                emb_conn.commit()
+                rows = []
+
+        if len(rows) > 0:
+            cur.executemany(
+                "INSERT OR REPLACE INTO predictions_raw_heads (img_id, model_name, head_blob, head_shapes, head_dtypes, anchors_info, features, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            emb_conn.commit()
+
+        return {"ok": True, "message": "stored"}
+
 
 class Clustering_layer:
     def __init__(self, model_str, model_name, debug=False):
@@ -479,6 +656,20 @@ class Clustering_layer:
                 )
             """)
         
+        emb_cursor.execute(
+            """CREATE TABLE IF NOT EXISTS predictions_raw_heads (
+                id INTEGER PRIMARY KEY,
+                img_id INTEGER NOT NULL,
+                model_name TEXT NOT NULL,
+                head_blob BLOB NOT NULL,
+                head_shapes TEXT NOT NULL,
+                head_dtypes TEXT NOT NULL,
+                anchors_info TEXT,
+                features BLOB,
+                created_ts INTEGER,
+                UNIQUE(img_id, model_name)
+            )"""
+        )
         emb_cursor.execute(
             "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value INTEGER)"
         )
