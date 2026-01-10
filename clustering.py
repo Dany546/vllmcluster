@@ -522,6 +522,88 @@ class yolowrapper(torch.nn.Module):
         return {"ok": True, "message": "stored"}
 
 
+def _directed_class_seg_loss(heads_pred: List[torch.Tensor], heads_tgt: List[torch.Tensor], is_seg: bool = False) -> float:
+    """Compute directed loss from preds -> targets by converting target logits to pseudo-labels.
+
+    For each corresponding head level, form binary targets = sigmoid(target_logits) > 0.5
+    then compute BCEWithLogitsLoss(pred_logits, binary_targets). Sum class and seg components per level.
+    """
+    loss_fn = torch.nn.BCEWithLogitsLoss(reduction="mean")
+    total = 0.0
+    n_levels = max(len(heads_pred), len(heads_tgt))
+    for i in range(n_levels):
+        if i >= len(heads_pred) or i >= len(heads_tgt):
+            continue
+        pa = heads_pred[i].detach().cpu()
+        pb = heads_tgt[i].detach().cpu()
+
+        # remove possible batch dim of 1
+        if pa.dim() == 4 and pa.shape[0] == 1:
+            pa = pa.squeeze(0)
+        if pb.dim() == 4 and pb.shape[0] == 1:
+            pb = pb.squeeze(0)
+
+        def to_chan_first(x: torch.Tensor) -> torch.Tensor:
+            if x.dim() == 2:
+                return x.unsqueeze(0)
+            if x.dim() == 3:
+                # Heuristic: assume (C,H,W) if first dim small, else (H,W,C)
+                if x.shape[0] <= 32:
+                    return x
+                else:
+                    return x.permute(2, 0, 1)
+            return x
+
+        pa = to_chan_first(pa)
+        pb = to_chan_first(pb)
+
+        ca = pa.shape[0]
+        cb = pb.shape[0]
+        cmin = min(ca, cb)
+        if cmin == 0:
+            continue
+        pa_trim = pa[:cmin]
+        pb_trim = pb[:cmin]
+
+        with torch.no_grad():
+            tgt_probs = torch.sigmoid(pb_trim)
+            tgt_labels = (tgt_probs > 0.5).float()
+
+        pa_flat = pa_trim.reshape(cmin, -1).transpose(0, 1).reshape(-1)
+        tgt_flat = tgt_labels.reshape(cmin, -1).transpose(0, 1).reshape(-1)
+
+        try:
+            l = float(loss_fn(pa_flat, tgt_flat))
+        except Exception:
+            l = float(torch.norm(pa_flat - tgt_flat).item())
+
+        total += l
+
+        if is_seg:
+            spa_a = pa_trim.mean(dim=0)
+            spa_b = pb_trim.mean(dim=0)
+            spa_a_flat = spa_a.reshape(-1)
+            with torch.no_grad():
+                spa_tgt = (torch.sigmoid(spa_b) > 0.5).float().reshape(-1)
+            try:
+                lseg = float(loss_fn(spa_a_flat, spa_tgt))
+            except Exception:
+                lseg = float(torch.norm(spa_a_flat - spa_tgt).item())
+            total += lseg
+
+    return float(total)
+
+
+def symmetric_class_seg_distance_from_heads(heads_a: List[torch.Tensor], heads_b: List[torch.Tensor], is_seg: bool = False) -> float:
+    """Compute symmetric distance between two images by averaging directed losses across levels.
+
+    distance = 0.5 * (loss(A->B) + loss(B->A)), where loss sums BCE class and seg terms per level.
+    """
+    la = _directed_class_seg_loss(heads_a, heads_b, is_seg=is_seg)
+    lb = _directed_class_seg_loss(heads_b, heads_a, is_seg=is_seg)
+    return 0.5 * (la + lb)
+
+
 class Clustering_layer:
     def __init__(self, model_str, model_name, debug=False):
         self.model_str = model_str
@@ -874,7 +956,68 @@ class Clustering_layer:
             if emb_i is None or emb_i.shape[0] == 0:
                 self.logger.info(f"Skipping empty line {i_block}: {emb_i.cpu()}")
                 continue
+            # For YOLO models, compute distances strictly from stored raw heads (class+seg loss).
+            if "yolo" in self.model_name:
+                def load_head_block_map(block_idx):
+                    start = int(block_idx * batch_size)
+                    end = int(min((block_idx + 1) * batch_size, n_samples))
+                    emb_cursor.execute(
+                        "SELECT id, img_id FROM embeddings WHERE id >= ? AND id < ?",
+                        (start, end),
+                    )
+                    rows_local = emb_cursor.fetchall()
+                    id_to_heads = {}
+                    ids = []
+                    for eid, img_id in rows_local:
+                        emb_cursor.execute(
+                            "SELECT head_blob FROM predictions_raw_heads WHERE img_id = ? AND model_name = ?",
+                            (int(img_id), self.model_name),
+                        )
+                        r = emb_cursor.fetchone()
+                        if r is None:
+                            raise RuntimeError(f"Missing raw heads for img_id={img_id} (embedding id={eid})")
+                        head_blob = r[0]
+                        # strictly require correct deserialization
+                        heads = heads_blob_to_tensors(head_blob)
+                        id_to_heads[int(eid)] = heads
+                        ids.append(int(eid))
+                    return ids, id_to_heads
 
+                # preload heads for i_block
+                idx_i_heads, id2heads_i = load_head_block_map(i_block)
+
+                for j_block in range(i_block, n_blocks):
+                    idx_j_heads, id2heads_j = load_head_block_map(j_block)
+                    if len(idx_j_heads) == 0:
+                        raise RuntimeError(f"Empty head block at j_block={j_block}")
+
+                    rows = []
+                    for gid_i in idx_i_heads:
+                        if gid_i not in id2heads_i:
+                            raise RuntimeError(f"Missing heads for embedding id {gid_i} in block {i_block}")
+                        heads_i = id2heads_i[gid_i]
+                        for gid_j in idx_j_heads:
+                            # enforce upper triangle ordering
+                            if i_block == j_block and gid_j < gid_i:
+                                continue
+                            if gid_j not in id2heads_j:
+                                raise RuntimeError(f"Missing heads for embedding id {gid_j} in block {j_block}")
+                            heads_j = id2heads_j[gid_j]
+                            # compute symmetric distance (may raise)
+                            d = symmetric_class_seg_distance_from_heads(heads_i, heads_j, is_seg=self.is_seg)
+                            rows.append((int(gid_i), int(gid_j), float(d)))
+
+                    if rows:
+                        dist_cursor.executemany(
+                            "INSERT OR REPLACE INTO distances (i, j, distance) VALUES (?, ?, ?)",
+                            rows,
+                        )
+                    dist_conn.commit()
+                self.logger.debug(f"Completed head-based block row {i_block + 1}/{n_blocks}")
+                # continue to next i_block
+                continue
+
+            # Fallback: compute distances from embeddings (existing behavior)
             for j_block in range(i_block, n_blocks):  # only upper triangle
                 idx_j, emb_j = load_block(j_block)
                 if emb_j is None:

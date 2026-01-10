@@ -92,6 +92,35 @@ def cluster(args):
             model.split(".")[0],
             debug=args.debug,
         )
+
+        # Optionally save raw YOLO heads into the embeddings DB first
+        if getattr(args, "save_raw", False) and "yolo" in model:
+            conn = sqlite3.connect(clustering_layer.embeddings_db, timeout=30)
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS predictions_raw_heads (
+                        id INTEGER PRIMARY KEY,
+                        img_id INTEGER NOT NULL,
+                        model_name TEXT NOT NULL,
+                        head_blob BLOB NOT NULL,
+                        head_shapes TEXT NOT NULL,
+                        head_dtypes TEXT NOT NULL,
+                        anchors_info TEXT,
+                        features BLOB,
+                        created_ts INTEGER,
+                        UNIQUE(img_id, model_name)
+                    )"""
+            )
+            conn.commit()
+            for batch_idx, (img_ids, images, labels) in enumerate(dataloader):
+                images = images.to(device)
+                clustering_layer.model.predict_and_store_raw(
+                    images, img_ids, emb_conn=conn, model_name=clustering_layer.model_name
+                )
+            conn.close()
+            print(f"Saved raw heads for {clustering_layer.model_name} to {clustering_layer.embeddings_db}")
+            if not getattr(args, "cluster", False):
+                continue
+
         clustering_layer.distance_matrix_db(dataloader)
 
         if run and False:
@@ -161,6 +190,11 @@ def parse_args():
         "--all",
         action="store_true",
         help="perform all steps, will override other flags if set",
+    )
+    parser.add_argument(
+        "--save-raw",
+        action="store_true",
+        help="Run model to save raw YOLO head predictions into embeddings DB",
     )
     args = parser.parse_args()
     args.all = (not (args.cluster and args.visu and args.knn)) | args.all
