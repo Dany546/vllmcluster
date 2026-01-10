@@ -427,14 +427,11 @@ class yolowrapper(torch.nn.Module):
             compress: whether to compress head blobs
             insert_batch: rows per DB transaction
         """
-        self.model.eval()
+        self.model.train()
         cur = emb_conn.cursor()
         B = images.shape[0]
         with torch.no_grad():
-            try:
-                raw_out = self.model.model(images)
-            except Exception:
-                raw_out = self.model(images)
+            raw_out = self.model(images)
 
         try:
             pooled = torch.cat([m.features for m in self.detection_layer_entry], dim=1)
@@ -476,11 +473,23 @@ class yolowrapper(torch.nn.Module):
                         head_tensors = [h[i] for h in layer_heads]
             except Exception:
                 head_tensors = None
-
             if head_tensors is None:
-                continue
-
-            head_blob, shapes_json, dtypes_json = tensors_to_heads_blob(head_tensors, compress=compress)
+                # Log that we couldn't extract head tensors for this image and
+                # create a small placeholder blob so downstream code can load
+                # an empty array instead of silently skipping the row.
+                try:
+                    self.logger.warning(f"No head tensors extracted for img_id={img_id}; inserting placeholder blob")
+                except Exception:
+                    pass
+                empty_arr = np.empty((0,), dtype=np.float32)
+                buf = io.BytesIO()
+                np.savez_compressed(buf, h0=empty_arr)
+                head_blob = buf.getvalue()
+                buf.close()
+                shapes_json = json.dumps([[0]])
+                dtypes_json = json.dumps([str(empty_arr.dtype)])
+            else:
+                head_blob, shapes_json, dtypes_json = tensors_to_heads_blob(head_tensors, compress=compress)
             anchors_info = json.dumps({})
             features_blob = None
             if pooled is not None:
@@ -925,40 +934,10 @@ class Clustering_layer:
         emb_conn = sqlite3.connect(embeddings_db, timeout=30)
         emb_cursor = emb_conn.cursor()
 
-        # Ensure raw YOLO head predictions are present for all embeddings.
-        # If some are missing, run the model to store them via `predict_and_store_raw`.
+        # For YOLO models we compute head tensors on-the-fly for distance computation
+        # and do not store raw predictions in the embeddings DB (to avoid large storage).
         if "yolo" in self.model_name:
-            self.logger.info("Verifying raw head predictions for YOLO model...")
-            emb_cursor.execute("SELECT id, img_id FROM embeddings")
-            emb_rows = emb_cursor.fetchall()
-            missing_img_ids = []
-            for eid, img_id in emb_rows:
-                emb_cursor.execute(
-                    "SELECT 1 FROM predictions_raw_heads WHERE img_id = ? AND model_name = ?",
-                    (int(img_id), self.model_name),
-                )
-                if emb_cursor.fetchone() is None:
-                    missing_img_ids.append(int(img_id))
-
-            if len(missing_img_ids) > 0:
-                self.logger.info(f"Found {len(missing_img_ids)} missing raw heads; computing them now.")
-                conn = emb_conn
-                # Iterate dataset and compute raw heads for batches containing missing images
-                for batch_idx, (img_ids, images, labels) in enumerate(data_loader):
-                    try:
-                        batch_img_ids = [int(x) for x in img_ids]
-                    except Exception:
-                        batch_img_ids = []
-                    if not any(i in missing_img_ids for i in batch_img_ids):
-                        continue
-                    images = images.to(device)
-                    try:
-                        self.model.predict_and_store_raw(images, img_ids, emb_conn=conn, model_name=self.model_name)
-                    except Exception as e:
-                        self.logger.error(f"Error saving raw heads for batch {batch_idx}: {e}")
-                self.logger.info("Finished writing missing raw heads.")
-            else:
-                self.logger.info("All raw heads already present.")
+            self.logger.info("YOLO model: will compute head tensors on-the-fly (no DB storage)")
 
         # Step 2: Compute distances with efficient resume
         n_samples = len(data_loader.dataset)
@@ -994,6 +973,7 @@ class Clustering_layer:
             # For YOLO models, compute distances strictly from stored raw heads (class+seg loss).
             if "yolo" in self.model_name:
                 def load_head_block_map(block_idx):
+                    # Compute head tensors for the block directly from the dataset.
                     start = int(block_idx * batch_size)
                     end = int(min((block_idx + 1) * batch_size, n_samples))
                     emb_cursor.execute(
@@ -1003,19 +983,82 @@ class Clustering_layer:
                     rows_local = emb_cursor.fetchall()
                     id_to_heads = {}
                     ids = []
+
+                    dataset = data_loader.dataset
+                    # build mapping from image id to dataset index for fast lookup
+                    try:
+                        id_to_ds_idx = {int(i): idx for idx, i in enumerate(dataset.ids)}
+                    except Exception:
+                        id_to_ds_idx = None
+
+                    # collect images for this block
+                    imgs = []
+                    img_ids_for_batch = []
+                    ds_labels = []
+                    ds_eids = []
                     for eid, img_id in rows_local:
-                        emb_cursor.execute(
-                            "SELECT head_blob FROM predictions_raw_heads WHERE img_id = ? AND model_name = ?",
-                            (int(img_id), self.model_name),
-                        )
-                        r = emb_cursor.fetchone()
-                        if r is None:
-                            raise RuntimeError(f"Missing raw heads for img_id={img_id} (embedding id={eid})")
-                        head_blob = r[0]
-                        # strictly require correct deserialization
-                        heads = heads_blob_to_tensors(head_blob)
-                        id_to_heads[int(eid)] = heads
-                        ids.append(int(eid))
+                        ds_idx = None
+                        if id_to_ds_idx is not None:
+                            ds_idx = id_to_ds_idx.get(int(img_id))
+                        if ds_idx is None:
+                            try:
+                                ds_idx = dataset.ids.index(int(img_id))
+                            except Exception:
+                                self.logger.error(f"Image id {img_id} not found in dataset; skipping")
+                                continue
+                        item = dataset[ds_idx]
+                        img_ids_for_batch.append(int(item[0]))
+                        imgs.append(item[1])
+                        ds_labels.append(item[2])
+                        ds_eids.append(int(eid))
+
+                    if len(imgs) == 0:
+                        return [], {}
+
+                    # run model in train mode but disable gradients
+                    self.model.train()
+                    with torch.no_grad():
+                        # process in a single batch (fits block size)
+                        batch_imgs = torch.stack(imgs, dim=0).to(device)
+                        raw_out = self.model.model(batch_imgs)
+
+                        # extract head tensors per image following same logic as predict_and_store_raw
+                        B = batch_imgs.shape[0]
+                        for i in range(B):
+                            head_tensors = None
+                            try:
+                                if isinstance(raw_out, (list, tuple)) and all(
+                                    isinstance(t, torch.Tensor) and t.shape[0] == B for t in raw_out
+                                ):
+                                    head_tensors = [t.detach().cpu()[i] for t in raw_out]
+                                elif isinstance(raw_out, (list, tuple)) and len(raw_out) == B:
+                                    candidate = raw_out[i]
+                                    if isinstance(candidate, (list, tuple)):
+                                        head_tensors = [
+                                            torch.as_tensor(x).detach().cpu()
+                                            if not isinstance(x, torch.Tensor)
+                                            else x.detach().cpu()
+                                            for x in candidate
+                                        ]
+                                    elif isinstance(candidate, torch.Tensor):
+                                        head_tensors = [candidate.detach().cpu()]
+                                    else:
+                                        head_tensors = [torch.as_tensor(candidate).detach().cpu()]
+                                elif isinstance(raw_out, torch.Tensor) and raw_out.shape[0] == B:
+                                    head_tensors = [raw_out.detach().cpu()[i]]
+                                else:
+                                    raise RuntimeError("Unexpected raw_out format")
+                            except Exception:
+                                head_tensors = None
+
+                            if head_tensors is None:
+                                # insert an empty placeholder to keep shapes consistent
+                                id_to_heads[int(ds_eids[i])] = [torch.empty((0,), dtype=torch.float32)]
+                                ids.append(int(ds_eids[i]))
+                            else:
+                                id_to_heads[int(ds_eids[i])] = head_tensors
+                                ids.append(int(ds_eids[i]))
+
                     return ids, id_to_heads
 
                 # preload heads for i_block
