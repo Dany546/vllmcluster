@@ -88,7 +88,11 @@ class PLSExtractor(TransformerMixin):
 
     def fit_transform(self, X: np.ndarray, y: np.ndarray):
         self.model = PLSRegression(n_components=self.n_components)
-        return self.model.fit_transform(X, y)
+        res = self.model.fit_transform(X, y)
+        # sklearn PLSRegression.fit_transform returns (X_scores, Y_scores)
+        if isinstance(res, tuple):
+            return res[0]
+        return res
 
 
 class KernelPCAExtractor(TransformerMixin):
