@@ -95,12 +95,17 @@ def main():
         X = embeddings_cache[emb]
         ids = ids_cache[emb]
         for target in targets:
-            # extract target values from meta if present
-            meta = meta_cache[emb]
-            if target not in meta:
-                print(f"Target {target} not found in embeddings meta for {emb}; skipping")
+            # Prefer extracting target values from a single reference embedding's metadata
+            # (the first loaded); fall back to per-embedding meta if missing.
+            ref_meta = meta_cache.get(first_emb, {})
+            meta = meta_cache.get(emb, {})
+            if target in ref_meta:
+                y = ref_meta[target]
+            elif target in meta:
+                y = meta[target]
+            else:
+                print(f"Target {target} not found in embeddings meta for {emb} or reference {first_emb}; skipping")
                 continue
-            y = meta[target]
             for preproc in preprocs:
                 for fs in fss:
                     for ex in extractors:
