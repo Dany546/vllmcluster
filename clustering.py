@@ -637,10 +637,10 @@ class Clustering_layer:
             self.logger.setLevel(logging.INFO)
 
         self.embeddings_db = (
-            f"/globalscratch/ucl/irec/darimez/dino/embeddings/{model_name}.db"
+            f"/CECI/home/ucl/irec/darimez/embeddings/{model_name}.db"
         )
         self.distances_db = (
-            f"/globalscratch/ucl/irec/darimez/dino/distances/{model_name}.db"
+            f"/CECI/home/ucl/irec/darimez/distances/{model_name}.db"
         )
 
     @torch.no_grad()
