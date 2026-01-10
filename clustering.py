@@ -925,6 +925,41 @@ class Clustering_layer:
         emb_conn = sqlite3.connect(embeddings_db, timeout=30)
         emb_cursor = emb_conn.cursor()
 
+        # Ensure raw YOLO head predictions are present for all embeddings.
+        # If some are missing, run the model to store them via `predict_and_store_raw`.
+        if "yolo" in self.model_name:
+            self.logger.info("Verifying raw head predictions for YOLO model...")
+            emb_cursor.execute("SELECT id, img_id FROM embeddings")
+            emb_rows = emb_cursor.fetchall()
+            missing_img_ids = []
+            for eid, img_id in emb_rows:
+                emb_cursor.execute(
+                    "SELECT 1 FROM predictions_raw_heads WHERE img_id = ? AND model_name = ?",
+                    (int(img_id), self.model_name),
+                )
+                if emb_cursor.fetchone() is None:
+                    missing_img_ids.append(int(img_id))
+
+            if len(missing_img_ids) > 0:
+                self.logger.info(f"Found {len(missing_img_ids)} missing raw heads; computing them now.")
+                conn = emb_conn
+                # Iterate dataset and compute raw heads for batches containing missing images
+                for batch_idx, (img_ids, images, labels) in enumerate(data_loader):
+                    try:
+                        batch_img_ids = [int(x) for x in img_ids]
+                    except Exception:
+                        batch_img_ids = []
+                    if not any(i in missing_img_ids for i in batch_img_ids):
+                        continue
+                    images = images.to(device)
+                    try:
+                        self.model.predict_and_store_raw(images, img_ids, emb_conn=conn, model_name=self.model_name)
+                    except Exception as e:
+                        self.logger.error(f"Error saving raw heads for batch {batch_idx}: {e}")
+                self.logger.info("Finished writing missing raw heads.")
+            else:
+                self.logger.info("All raw heads already present.")
+
         # Step 2: Compute distances with efficient resume
         n_samples = len(data_loader.dataset)
         n_blocks = len(data_loader)
