@@ -789,9 +789,9 @@ class Clustering_layer:
         else:
             self.logger.info(f"Found {existing_count} existing embeddings ...")
 
-        idx = existing_count
+        idx = int(existing_count)
         new_embeddings = 0
-        if existing_count < len(data_loader.dataset):
+        if idx < len(data_loader.dataset):
             data_loader.start_idx = existing_count
             for batch_ids, (img_ids, images, labels) in enumerate(data_loader):
                 images = images.to(device)
