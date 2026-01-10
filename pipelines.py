@@ -195,15 +195,9 @@ class FeaturePipeline:
         for step in self.steps:
             # some transformers expect y
             if hasattr(step, 'fit_transform'):
-                if 'y' in step.fit_transform.__code__.co_varnames:
-                    cur = step.fit_transform(cur, y)
-                else:
-                    cur = step.fit_transform(cur)
+                cur = step.fit_transform(cur, y) 
             else:
-                if 'y' in step.fit.__code__.co_varnames:
-                    step.fit(cur, y)
-                else:
-                    step.fit(cur)
+                step.fit(cur, y) 
                 cur = step.transform(cur)
         return cur
 

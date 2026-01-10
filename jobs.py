@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.neighbors import KNeighborsRegressor
 
-from .pipelines import FeaturePipeline, NoFeaturesLeft
-from . import db_utils
+from pipelines import FeaturePipeline, NoFeaturesLeft
+import db_utils
 
 
 def worker_run(
@@ -64,14 +64,14 @@ def worker_run(
         # build pipeline steps (only used for embedding-based pipelines)
         steps = []
         if config.get('preproc') == 'standard':
-            from .pipelines import StandardScalerWrapper
+            from pipelines import StandardScalerWrapper
 
             steps.append(StandardScalerWrapper())
 
         fs = config.get('feature_selection')
         if fs and fs.startswith('spearman-'):
             thr = float(fs.split('-')[-1])
-            from .pipelines import SpearmanFeatureSelector
+            from pipelines import SpearmanFeatureSelector
 
             steps.append(SpearmanFeatureSelector(thr))
 
@@ -79,19 +79,19 @@ def worker_run(
         extractor = config.get('extractor')
         extractor_params = config.get('extractor_params', {})
         if extractor == 'PLS':
-            from .pipelines import PLSExtractor
+            from pipelines import PLSExtractor
 
             steps.append(PLSExtractor(**extractor_params))
         elif extractor == 'KPCA':
-            from .pipelines import KernelPCAExtractor
+            from pipelines import KernelPCAExtractor
 
             steps.append(KernelPCAExtractor(**extractor_params))
         elif extractor == 'TSNE':
-            from .pipelines import TSNEExtractor
+            from pipelines import TSNEExtractor
 
             steps.append(TSNEExtractor(**extractor_params))
         elif extractor == 'UMAP':
-            from .pipelines import UMAPExtractor
+            from pipelines import UMAPExtractor
 
             steps.append(UMAPExtractor(**extractor_params))
         else:
