@@ -15,8 +15,8 @@ from joblib import Parallel, delayed
 from sklearn.model_selection import KFold
 import numpy as np
 
-from . import db_utils
-from .jobs import worker_run
+import db_utils
+from jobs import worker_run
 
 
 def load_config(path: str):
@@ -53,8 +53,8 @@ def main():
 
     knn_grid = build_knn_grid()
 
-    emb_dir = args.__dict__.get('embeddings_dir') or cfg.get('embeddings_dir')
-    dist_dir = args.__dict__.get('distances_dir') or cfg.get('distances_dir')
+    emb_dir = "/CECI/home/ucl/irec/darimez/embeddings"
+    dist_dir = "/CECI/home/ucl/irec/darimez/distances"
 
     tasks = []
     # load embeddings per model
