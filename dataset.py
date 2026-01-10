@@ -297,7 +297,6 @@ class COCODataset(torch.utils.data.Dataset):
         else:
             labels["masks"] = torch.empty((0, images.shape[2], images.shape[3]), dtype=torch.uint8)
 
-        print(images.type())
         return ids, images, labels
 
     
