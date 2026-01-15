@@ -112,6 +112,53 @@ def insert_grid_result(path: Optional[str], row: Dict[str, Any]):
     _insert_with_retry(path, sql, params)
 
 
+def has_results(
+    path: Optional[str],
+    run_id: str,
+    embedding_model: Optional[str] = None,
+    target: Optional[str] = None,
+    preproc: Optional[str] = None,
+    feature_selection: Optional[str] = None,
+    extractor: Optional[str] = None,
+    extractor_params: Optional[str] = None,
+) -> bool:
+    """Return True if any grid_results rows exist matching the provided keys.
+
+    Only filters on provided non-None parameters; `run_id` is required.
+    """
+    if run_id is None:
+        return False
+    path = path or get_grid_db_path()
+    clauses = ["run_id = ?"]
+    params = [run_id]
+    if embedding_model is not None:
+        clauses.append("embedding_model = ?")
+        params.append(embedding_model)
+    if target is not None:
+        clauses.append("target = ?")
+        params.append(target)
+    if preproc is not None:
+        clauses.append("preproc = ?")
+        params.append(preproc)
+    if feature_selection is not None:
+        clauses.append("feature_selection = ?")
+        params.append(feature_selection)
+    if extractor is not None:
+        clauses.append("extractor = ?")
+        params.append(extractor)
+    if extractor_params is not None:
+        clauses.append("extractor_params = ?")
+        params.append(str(extractor_params))
+
+    q = "SELECT COUNT(1) FROM grid_results WHERE " + " AND ".join(clauses)
+    con = _connect(path)
+    cur = con.cursor()
+    cur.execute(q, params)
+    cnt = cur.fetchone()[0]
+    con.close()
+    return int(cnt) > 0
+
+
 def insert_skipped(path: Optional[str], info: Dict[str, Any]):
     info = dict(info)
     info['status'] = 'skipped'

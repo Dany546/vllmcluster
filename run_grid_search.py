@@ -16,6 +16,9 @@ from sklearn.model_selection import KFold
 import numpy as np
 
 import db_utils
+import json
+import hashlib
+import bad_runs
 from jobs import worker_run
 
 
@@ -109,8 +112,14 @@ def main():
             for preproc in preprocs:
                 for fs in fss:
                     for ex in extractors:
+                        # create a stable, task-unique run_id so we can persist bad runs
+                        params_json = json.dumps(ex.get('params', {}), sort_keys=True)
+                        params_hash = hashlib.md5(params_json.encode('utf-8')).hexdigest()[:8]
+                        base_run = cfg.get('run_id', 'run0')
+                        task_run_id = f"{base_run}_{emb}_{target}_{preproc}_{fs}_{ex['name']}_{params_hash}"
+
                         task = {
-                            'run_id': cfg.get('run_id', 'run0'),
+                            'run_id': task_run_id,
                             'embedding_model': emb,
                             'target': target,
                             'aggregation': 'image_mean',
@@ -121,6 +130,34 @@ def main():
                             'knn_grid': knn_grid,
                             'use_precomputed_distances': False,
                         }
+
+                        # Skip scheduling tasks that are recorded as bad (e.g., too few features / n_components issues)
+                        try:
+                            if bad_runs.is_bad_run(task_run_id):
+                                print(f"Skipping task (known bad run): {task_run_id}")
+                                continue
+                        except Exception:
+                            # if bad_runs lookup fails, proceed to schedule the task to avoid silent loss
+                            pass
+
+                        # Scheduler-level resume: skip tasks already present in the grid DB
+                        try:
+                            if db_utils.has_results(
+                                db_path,
+                                run_id=task_run_id,
+                                embedding_model=emb,
+                                target=target,
+                                preproc='standard' if preproc == 'standard' else 'none',
+                                feature_selection=fs,
+                                extractor=ex['name'],
+                                extractor_params=str(ex.get('params', {})),
+                            ):
+                                print(f"Skipping task (already in DB): {task_run_id}")
+                                continue
+                        except Exception:
+                            # if DB lookup fails, schedule the task to avoid silent loss
+                            pass
+
                         tasks.append((task, X, y, ids))
 
                         # also add precomputed-distance variant if distances present

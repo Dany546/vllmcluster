@@ -14,6 +14,7 @@ from sklearn.neighbors import KNeighborsRegressor
 
 from pipelines import FeaturePipeline, NoFeaturesLeft
 import db_utils
+import bad_runs
 
 
 def worker_run(
@@ -111,6 +112,17 @@ def worker_run(
             try:
                 X_train_t = pipeline.fit_transform(X_train, y_train)
             except NoFeaturesLeft:
+                # record bad run (no features remaining after feature selection)
+                try:
+                    bad_runs.append_bad_run(
+                        run_id=config.get('run_id'),
+                        algo=extractor,
+                        requested_n_components=extractor_params.get('n_components') if isinstance(extractor_params, dict) else None,
+                        observed_n_features=0,
+                        hyperparams=config,
+                    )
+                except Exception:
+                    pass
                 db_utils.insert_skipped(db_path, {
                     'run_id': config.get('run_id'),
                     'embedding_model': config.get('embedding_model'),
@@ -126,6 +138,61 @@ def worker_run(
                     'reason': 'no_features',
                 })
                 continue
+
+            except ValueError as e:
+                # sklearn may raise ValueError when requested n_components is too large
+                msg = str(e)
+                if 'n_components' in msg or 'upper bound' in msg or 'Reduce `n_components`' in msg:
+                    # try to estimate observed feature count after feature selection
+                    observed = None
+                    try:
+                        from pipelines import PLSExtractor, KernelPCAExtractor, TSNEExtractor, UMAPExtractor
+
+                        cur = X_train
+                        for step in pipeline.steps:
+                            if isinstance(step, (PLSExtractor, KernelPCAExtractor, TSNEExtractor, UMAPExtractor)):
+                                break
+                            if hasattr(step, 'fit_transform'):
+                                cur = step.fit_transform(cur, y_train)
+                            else:
+                                step.fit(cur, y_train)
+                                cur = step.transform(cur)
+                        if hasattr(cur, 'shape') and len(cur.shape) > 1:
+                            observed = int(cur.shape[1])
+                        else:
+                            observed = 0
+                    except Exception:
+                        observed = X_train.shape[1] if X_train is not None else 0
+
+                    try:
+                        bad_runs.append_bad_run(
+                            run_id=config.get('run_id'),
+                            algo=extractor,
+                            requested_n_components=extractor_params.get('n_components') if isinstance(extractor_params, dict) else None,
+                            observed_n_features=observed,
+                            hyperparams=config,
+                        )
+                    except Exception:
+                        pass
+
+                    db_utils.insert_skipped(db_path, {
+                        'run_id': config.get('run_id'),
+                        'embedding_model': config.get('embedding_model'),
+                        'target': config.get('target'),
+                        'aggregation': config.get('aggregation'),
+                        'preproc': config.get('preproc'),
+                        'feature_selection': config.get('feature_selection'),
+                        'extractor': extractor,
+                        'extractor_params': str(extractor_params),
+                        'fold': fi,
+                        'knn_n': None,
+                        'knn_metric': None,
+                        'reason': 'n_components_too_large',
+                    })
+                    continue
+                else:
+                    # re-raise unexpected ValueErrors
+                    raise
 
             # transform val
             X_val_t = pipeline.transform(X_val)
