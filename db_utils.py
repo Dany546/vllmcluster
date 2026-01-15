@@ -10,6 +10,7 @@ import sqlite3
 import time
 from typing import Any, Dict, Iterable, List, Optional
 import numpy as np
+import pandas as pd
 
 DEFAULT_DB_NAME = "grid_search.db"
 
@@ -17,7 +18,7 @@ DEFAULT_DB_NAME = "grid_search.db"
 def get_grid_db_path() -> str:
     # Use $CECIHOME if set, otherwise cwd
     base = os.environ.get('CECIHOME', os.getcwd())
-    return os.path.join(base, DEFAULT_DB_NAME)
+    return '/CECI/home/ucl/irec/darimez/grid_search.db'
 
 
 def _connect(path: str):
@@ -90,6 +91,21 @@ def insert_grid_result(path: Optional[str], row: Dict[str, Any]):
         "INSERT INTO grid_results(run_id, embedding_model, target, aggregation, preproc, feature_selection, extractor, extractor_params, knn_n, knn_metric, fold, spearman, r2, mae, status, reason, ts)"
         " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     )
+    # Coerce certain fields to stable types to avoid losing info (e.g., reason)
+    extractor_params = row.get('extractor_params')
+    if extractor_params is not None:
+        try:
+            extractor_params = str(extractor_params)
+        except Exception:
+            extractor_params = repr(extractor_params)
+
+    reason = row.get('reason')
+    if reason is not None:
+        try:
+            reason = str(reason)
+        except Exception:
+            reason = repr(reason)
+
     params = [
         row.get('run_id'),
         row.get('embedding_model'),
@@ -98,7 +114,7 @@ def insert_grid_result(path: Optional[str], row: Dict[str, Any]):
         row.get('preproc'),
         row.get('feature_selection'),
         row.get('extractor'),
-        row.get('extractor_params'),
+        extractor_params,
         row.get('knn_n'),
         row.get('knn_metric'),
         row.get('fold'),
@@ -106,7 +122,7 @@ def insert_grid_result(path: Optional[str], row: Dict[str, Any]):
         row.get('r2'),
         row.get('mae'),
         row.get('status', 'ok'),
-        row.get('reason'),
+        reason,
         time.time(),
     ]
     _insert_with_retry(path, sql, params)
@@ -162,7 +178,13 @@ def has_results(
 def insert_skipped(path: Optional[str], info: Dict[str, Any]):
     info = dict(info)
     info['status'] = 'skipped'
+    # Ensure a human-readable reason is always present and stored as string
     info.setdefault('reason', 'skipped_by_pipeline')
+    if info.get('reason') is not None:
+        try:
+            info['reason'] = str(info['reason'])
+        except Exception:
+            info['reason'] = repr(info['reason'])
     insert_grid_result(path, info)
 
 
@@ -254,6 +276,26 @@ def read_embeddings_db(db_path: str, table: str = 'embeddings'):
 
     con.close()
     return X, meta, ids
+
+
+def load_grid_results(db_path: Optional[str] = None) -> pd.DataFrame:
+    """Load the `grid_results` table from the grid_search DB into a DataFrame.
+
+    Returns an empty DataFrame on error or if the table is missing.
+    """
+    path = db_path or get_grid_db_path()
+    try:
+        con = sqlite3.connect(path)
+        df = pd.read_sql_query("SELECT * FROM grid_results", con)
+        con.close()
+        if 'ts' in df.columns:
+            try:
+                df['ts'] = pd.to_datetime(df['ts'], unit='s')
+            except Exception:
+                pass
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 class DistancesDBReader:
