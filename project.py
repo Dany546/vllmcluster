@@ -41,7 +41,7 @@ def compute_and_store(X, model_name, hyperparams, db_path="", algo="tsne"):
 
     # Instantiate projector
     if algo == "tsne":
-        projector = TSNE(**hyperparams, random_state=42)
+        projector = TSNE(**hyperparams, random_state=42, method="exact")
     else:
         projector = UMAP(**hyperparams, random_state=42)
 
