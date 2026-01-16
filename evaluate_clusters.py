@@ -19,7 +19,7 @@ from utils import get_logger, load_distances, load_embeddings
 
 import wandb
 
-DB_PATH = "/globalscratch/ucl/irec/darimez/dino/knn_results.db"
+DB_PATH = "/CECI/home/ucl/irec/darimez/knn_results.db"
 
 
 def init_db():
@@ -129,7 +129,7 @@ def insert_record(record, c):
 
 
 def get_lower_dim_tables():
-    db_path = f"/globalscratch/ucl/irec/darimez/dino/proj/"
+    db_path = f"/CECI/home/ucl/irec/darimez/proj/"
     lower_dim_tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
@@ -173,7 +173,8 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric):
     n_components = [2, 10, 50]
     k_targ = list(itertools.product(neighbor_grid, targets, n_components))
     tasks = {}  # list of (table_name, k)
-    lower_dim_names, lower_dim_tables = get_lower_dim_tables()
+    # lower_dim_names, lower_dim_tables = get_lower_dim_tables()
+    lower_dim_names, lower_dim_tables = [], []
     table_names = [
         table.split("/")[-1].split(".")[0] for table in tables
     ] + lower_dim_names
@@ -448,7 +449,7 @@ def plot_results(df):
 
 
 def KNN(args):
-    db_path = f"/globalscratch/ucl/irec/darimez/dino/embeddings/"
+    db_path = f"/CECI/home/ucl/irec/darimez/distances/"
     tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)

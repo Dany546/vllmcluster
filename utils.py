@@ -110,17 +110,67 @@ def load_embeddings(db_path, query: Optional[str] = None):
 
 
 def load_distances(db_path):
+    # Support fallback locations: if the provided path does not exist, try
+    # $CECIHOME/distances/<basename> and <basename>.db. Also accept databases
+    # that use column name 'dist' instead of 'distance'.
+    original_path = db_path
+    if not os.path.exists(db_path):
+        base = os.environ.get("CECIHOME", "/CECI/home/ucl/irec/darimez")
+        alt = os.path.join(base, "distances", os.path.basename(db_path))
+        if os.path.exists(alt):
+            db_path = alt
+        elif os.path.exists(alt + ".db"):
+            db_path = alt + ".db"
+        else:
+            # try basename + .db directly
+            alt2 = os.path.join(base, "distances", os.path.basename(db_path) + ".db")
+            if os.path.exists(alt2):
+                db_path = alt2
+
     conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT i, j, distance FROM distances ORDER BY i, j", conn)
+    # attempt common variants
+    df = None
+    try:
+        df = pd.read_sql_query("SELECT i, j, distance FROM distances ORDER BY i, j", conn)
+    except Exception:
+        try:
+            df = pd.read_sql_query("SELECT i, j, dist FROM distances ORDER BY i, j", conn)
+        except Exception:
+            # scan tables for a likely distances table
+            try:
+                tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)
+                for t in tables['name'].values:
+                    try:
+                        info = pd.read_sql_query(f"PRAGMA table_info({t})", conn)
+                        cols = info['name'].values.tolist()
+                        if ('i' in cols or 'row_i' in cols) and ('j' in cols or 'row_j' in cols) and (
+                            'distance' in cols or 'dist' in cols
+                        ):
+                            dist_col = 'distance' if 'distance' in cols else 'dist'
+                            df = pd.read_sql_query(f"SELECT i, j, {dist_col} FROM {t} ORDER BY i, j", conn)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                df = None
+
     conn.close()
-    rows = df[["i", "j", "distance"]].values  # or cursor.fetchall() if you prefer
+    if df is None or df.shape[0] == 0:
+        raise RuntimeError(f"Could not read distances from {original_path} (resolved to {db_path})")
+
+    # Normalize column name to 'distance'
+    if 'distance' in df.columns:
+        rows = df[["i", "j", "distance"]].values
+    else:
+        rows = df[["i", "j", "dist"]].values
+
     rows = rows[np.lexsort((rows[:, 1], rows[:, 0]))]
 
     # Map original IDs to 0..n-1
     unique_ids = np.unique(np.concatenate([rows[:, 0], rows[:, 1]]))
     id_to_idx = {id_: idx for idx, id_ in enumerate(unique_ids)}
     n = len(unique_ids)
-    print(f"Number of nodes: {n}")
+    print(f"Number of nodes: {n} (from {db_path})")
     dist_matrix = np.zeros((n, n), dtype=float)
     # Vectorized remapping
     i_idx = np.vectorize(id_to_idx.get)(rows[:, 0])
