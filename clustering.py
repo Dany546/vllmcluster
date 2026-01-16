@@ -659,79 +659,24 @@ class Clustering_layer:
         data_loader,
         pragma_speed: bool = True,
     ) -> Tuple[str, str]:
-        """Compute pairwise distances and store them in SQLite without loading the full matrix."""
+        """Compute pairwise distances and store embeddings in a vector-enabled SQLite DB."""
         batch_size = len(next(iter(data_loader))[0])
         embeddings_db = self.embeddings_db
-        distances_db = self.distances_db
+        distances_db = self.distances_db  # you can keep this path if you want to store other info
 
-        # --- Open embeddings DB ---
-        emb_conn = sqlite3.connect(embeddings_db, timeout=30)
-        if pragma_speed:
-            emb_conn.execute("PRAGMA journal_mode=WAL")
-            emb_conn.execute("PRAGMA synchronous=OFF")
-            emb_conn.execute("PRAGMA temp_store=MEMORY")
-            emb_conn.execute("PRAGMA cache_size=-20000")
-        emb_cursor = emb_conn.cursor()
-        
-        # Create table schema based on model type
+        # --- Open vector-enabled embeddings DB ---
+        from sqlvector_utils import connect_vec_db, create_embeddings_table, serialize_float32_array, insert_embeddings_batch, build_vector_index
+
+        emb_conn = connect_vec_db(embeddings_db)
+        # dimension: infer from model output by running one batch or set explicitly
+        # Here we infer from a dummy forward pass if possible
+        # We'll assume model returns embeddings of shape [B, D] when called with images
+        # Use a small sample to infer dim
+        img_ids, sample_images, labels = next(iter(data_loader))
+        sample_images = sample_images.to(device) 
         if "yolo" in self.model_name:
-            if self.is_seg:
-                # Segmentation model schema
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS embeddings (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        embedding BLOB,
-                        hit_freq REAL,
-                        mean_iou REAL,
-                        mean_conf REAL,
-                        mean_dice REAL,
-                        flag_cat INTEGER,
-                        flag_supercat INTEGER,
-                        box_loss REAL,
-                        cls_loss REAL,
-                        dfl_loss REAL,
-                        seg_loss REAL
-                    )
-                """)
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS predictions (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        iou BLOB,
-                        conf BLOB,
-                        dice BLOB,
-                        cat BLOB,
-                        supercat BLOB
-                    )
-                """)
-            else:
-                # Detection model schema
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS embeddings (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        embedding BLOB,
-                        hit_freq REAL,
-                        mean_iou REAL,
-                        mean_conf REAL,
-                        flag_cat INTEGER,
-                        flag_supercat INTEGER,
-                        box_loss REAL,
-                        cls_loss REAL,
-                        dfl_loss REAL
-                    )
-                """)
-                emb_cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS predictions (
-                        id INTEGER PRIMARY KEY,
-                        img_id INTEGER,
-                        iou BLOB,
-                        conf BLOB,
-                        cat BLOB,
-                        supercat BLOB
-                    )
-                """)
+            sample_emb, _, _ = self.model(sample_images, labels)
+            dim = sample_emb.shape[1]
         else:
             # Non-YOLO models (DINO, CLIP)
             emb_cursor.execute("""
@@ -766,7 +711,98 @@ class Clustering_layer:
         )
         emb_conn.commit()
 
-        # Setup distances database
+        create_embeddings_table(emb_conn, dim, is_seg=self.is_seg)
+
+        # --- Insert embeddings while regenerating them ---
+        emb_conn.close()
+        emb_conn = connect_vec_db(embeddings_db)
+        total_inserted = 0
+        for batch_ids, (img_ids, images, labels) in enumerate(data_loader):
+            images = images.to(device)
+            if "yolo" in self.model_name:
+                emb, outputs, all_output = self.model(images, labels)
+            else:
+                emb = self.model(images)
+
+            rows = []
+            if "yolo" in self.model_name:
+                if self.is_seg:
+                    for id, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
+                        miou, mconf, cat, supercat, hit_freq, dice = output[:6]
+                        # losses appended at end if compute_losses used; adapt if different
+                        # Use defaults if not present
+                        box_loss = output[6] if len(output) > 6 else 0.0
+                        cls_loss = output[7] if len(output) > 7 else 0.0
+                        dfl_loss = output[8] if len(output) > 8 else 0.0
+                        seg_loss = output[9] if len(output) > 9 else 0.0
+                        emb_bytes = serialize_float32_array(vec.numpy())
+                        row = (
+                            int((batch_ids * batch_size) + id),
+                            int(img_id),
+                            emb_bytes,
+                            float(hit_freq),
+                            float(miou),
+                            float(mconf),
+                            float(dice),
+                            int(cat),
+                            int(supercat),
+                            float(box_loss),
+                            float(cls_loss),
+                            float(dfl_loss),
+                            float(seg_loss),
+                        )
+                        rows.append(row)
+                else:
+                    for id, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
+                        miou, mconf, cat, supercat, hit_freq, dice = output[:6]
+                        box_loss = output[6] if len(output) > 6 else 0.0
+                        cls_loss = output[7] if len(output) > 7 else 0.0
+                        dfl_loss = output[8] if len(output) > 8 else 0.0
+                        emb_bytes = serialize_float32_array(vec.numpy())
+                        row = (
+                            int((batch_ids * batch_size) + id),
+                            int(img_id),
+                            emb_bytes,
+                            float(hit_freq),
+                            float(miou),
+                            float(mconf),
+                            int(cat),
+                            int(supercat),
+                            float(box_loss),
+                            float(cls_loss),
+                            float(dfl_loss),
+                        )
+                        rows.append(row)
+            else:
+                for id, (img_id, vec, label) in enumerate(zip(img_ids, emb.cpu(), labels["cls"])):
+                    cpu_labels = label.numpy()
+                    values, counts = np.unique(cpu_labels, return_counts=True)
+                    most_frequent_cat = int(values[np.argmax(counts)])
+                    super_cat = [cat_to_super[cat] for cat in cpu_labels]
+                    values2, counts2 = np.unique(super_cat, return_counts=True)
+                    most_frequent_supercat = int(values2[np.argmax(counts2)])
+                    emb_bytes = serialize_float32_array(vec.numpy())
+                    row = (
+                        int((batch_ids * batch_size) + id),
+                        int(img_id),
+                        emb_bytes,
+                        0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0,
+                    )
+                    rows.append(row)
+
+            if rows:
+                insert_embeddings_batch(emb_conn, rows)
+                total_inserted += len(rows)
+
+        # Build index once after all inserts
+        build_vector_index(emb_conn)
+        emb_conn.execute('INSERT OR REPLACE INTO metadata VALUES (?, ?)', ("total_count", str(total_inserted)))
+        emb_conn.commit()
+        emb_conn.close()
+
+        # Optionally keep distances DB for other uses, but we no longer precompute all pairwise distances here.
+        # If you still need a distances DB for compatibility, you can keep creating it but leave it empty or compute on demand.
         dist_conn = sqlite3.connect(distances_db)
         dist_conn.execute("PRAGMA journal_mode=WAL")
         dist_conn.execute("PRAGMA synchronous=OFF")
@@ -1121,4 +1157,6 @@ class Clustering_layer:
         self.logger.info("Distance computation complete")
         emb_conn.close()
         dist_conn.close()
+
+        self.logger.info(f"Inserted {total_inserted} embeddings into {embeddings_db} and built index")
         return embeddings_db, distances_db

@@ -1,5 +1,30 @@
+# Bytecode
+__pycache__/
+*.pyc
+
+# Logs and job outputs
+job*.err
+job*.out
+*.log
+
+# WandB runs and artifacts
+wandb/
+
+# Virtualenvs
+venv/
+dino/
+
+# SQLite DBs (optional, comment-out if you want to track DBs)
+knn_results.db
+# local proj DBs
+proj/*.db
+
+# Editor files
+.vscode/
+.DS_Store
 __pycache__/
 wandb/
 *.pt
 dino/
 job.err job.out
+tmp_tsne_test.db
