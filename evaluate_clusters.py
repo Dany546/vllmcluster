@@ -233,7 +233,7 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric, model_filte
     base_targets = ["hit_freq", "mean_iou", "flag_supercat", "box_loss", "cls_loss", "dfl_loss"]
 
     tasks = {}  # list of (table_name, k)
-    lower_dim_tables, lower_dim_names = get_lower_dim_tables(model_filter=tables)
+    lower_dim_tables, lower_dim_names = [], [] # get_lower_dim_tables(model_filter=tables)
     table_names = [table.split("/")[-1].split(".")[0] for table in tables]
     all_tables_names = table_names + lower_dim_names
     all_tables = table_names + lower_dim_tables
@@ -393,7 +393,9 @@ def work_fn(args):
                         "\n    nan_any: " + str(bool(np.isnan(avg_dists).any())),
                         "\n    inf_any: " + str(bool(np.isinf(avg_dists).any())), 
                 )
-                dummy_var = input('Press Enter to continue...')
+                # Removed blocking input() to avoid EOFError in worker processes
+                # when running under joblib/loky. Log a brief warning instead.
+                logger.warning("Constant/invalid input detected for spearmanr; continuing without interactive pause")
 
             err_dist_corr = spearmanr(sample_error, avg_dists)[0] 
 
@@ -496,8 +498,37 @@ def is_valid_target_array(targ_arr, n_samples, source_desc, target_name, logger)
 
 
 def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=-1, batch_size=32):
-    _emb_res = load_embeddings(table_path)
-    ids, X, hfs, mious, mconfs, cats, supercats, losses = _emb_res
+    logger = get_logger(True)
+    # Try to load precomputed distances (preferred); fall back to embeddings matrix
+    distances = None
+    try:
+        distances = load_distances(table_path)
+    except Exception:
+        # Try alternative conventional locations
+        try:
+            distances = load_distances(table_path.replace("embeddings", "distances"))
+        except Exception:
+            distances = None
+
+    # Load embeddings/metadata if available (may be in a parallel 'embeddings' DB)
+    ids = X = hfs = mious = mconfs = cats = supercats = losses = None
+    try:
+        emb_path = table_path.replace("distances", "embeddings")
+        _emb_res = load_embeddings(emb_path)
+    except Exception:
+        try:
+            _emb_res = load_embeddings(table_path)
+        except Exception:
+            _emb_res = None
+
+    if _emb_res is not None:
+        try:
+            ids, X, hfs, mious, mconfs, cats, supercats, losses = _emb_res
+        except Exception:
+            # If load_embeddings returned a raw embedding matrix for lower-dim tables
+            X = _emb_res
+            ids = None
+
     targets = {
         "hit_freq": hfs,
         "mean_iou": mious,
@@ -510,9 +541,22 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
         "dfl_loss": losses.get("dfl_loss") if isinstance(losses, dict) else None,
         "seg_loss": losses.get("seg_loss") if isinstance(losses, dict) else None,
     }
-    distances = X # load_distances(table_path.replace("embeddings", "distances"))
+    # distances = X # 
+    distances = load_distances(table_path.replace("embeddings", "distances"))
     # Use pre-generated deterministic fold indices for consistency
     folds = get_fold_indices(n_splits=args_list[0][3], random_state=42)
+
+    # Determine number of samples from distances or embeddings
+    n_samples = None
+    if distances is not None:
+        n_samples = distances.shape[0]
+    elif X is not None:
+        try:
+            n_samples = X.shape[0]
+        except Exception:
+            n_samples = None
+    if n_samples is None:
+        raise RuntimeError(f"Could not determine number of samples for table {table_path}")
 
     # We'll construct task arguments on-the-fly and execute them in batches
     batch = []
@@ -759,11 +803,12 @@ def plot_results(df):
 
 def KNN(args):
     db_path = f"/CECI/home/ucl/irec/darimez/distances/"
-    tables = [
+    all_tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
         if file.endswith(".db") and not file=='attention.db'
     ]  # extend as needed
+    logger = get_logger(args.debug)
     if True:
         # If user provided specific table(s) via CLI, filter down the table list.
         if getattr(args, "table", None):
@@ -868,6 +913,25 @@ def KNN(args):
                 pbar.close()
             except Exception:
                 pass
+            # If we processed tasks, upload results and plot to wandb
+            if len(records) > 0:
+                try:
+                    records_df = pd.DataFrame(
+                        data=[record.values() for record in records],
+                        columns=list(records[0].keys()),
+                    )
+                    run.log(
+                        {
+                            "new_results": wandb.Table(
+                                data=records_df.values.tolist(),
+                                columns=list(records_df.columns),
+                            )
+                        }
+                    )
+                    fig = plot_results(records_df)
+                    run.log({"plot": fig})
+                except Exception as e:
+                    logger.error("Failed to log results/plot to wandb: %s", e)
         else:
             # No tasks scheduled — provide diagnostic info to help the user debug
             logger.warning("No KNN tasks were scheduled.")
