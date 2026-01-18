@@ -858,7 +858,7 @@ def KNN(args):
         # Use fixed random seed for determinism across all hyperparameter combinations
         RN = 42
         num_folds = 10
-        distance_metric = "euclidean"
+        distance_metric = "loss"
         # Allow narrowing the grid to a subset of models via CLI: --model_filter "yolov11x-seg,other"
         model_filter = None
         if getattr(args, "model_filter", None):
