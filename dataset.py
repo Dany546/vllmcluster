@@ -224,7 +224,13 @@ class COCODataset(torch.utils.data.Dataset):
 
 
         image = transformed["image"]
-        image_t = image.to(torch.float32)  # torch.Tensor CxHxW
+        # Convert numpy array to torch tensor if needed (for YOLO: HWC uint8 -> CHW float32 [0-1])
+        # DINO/CLIP already converted by ToTensorV2 in augmentation pipeline
+        if isinstance(image, np.ndarray):
+            image = torch.from_numpy(image).permute(2, 0, 1).to(torch.float32) / 255.0  # HWC uint8 -> CHW [0, 1]
+        else:
+            image = image.to(torch.float32)  # Already a tensor, just ensure float32
+        image_t = image
 
         transformed_bboxes = transformed.get("bboxes", [])
         transformed_labels = transformed.get("category_ids", [])

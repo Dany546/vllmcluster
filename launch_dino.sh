@@ -1,9 +1,12 @@
 #!/bin/bash
 
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem-per-cpu=2G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=3G
 #SBATCH --job-name=dino
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --constraint='TeslaL40s|TeslaA100|TeslaA100_80'
 #SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.out
 #SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.err
 
@@ -30,9 +33,9 @@ source dino/bin/activate
 
 # python test_sqlvector_refactor.py
 # pytest -q test_cocodataset_augmentation_integration.py -s
-# python main.py --model="dino,dino_attention,dinov3,dinov3_attention,clip" 
-python main.py --visu
-# python main.py --knn
+python main.py --cluster --model="yolo11x-seg.pt" 
+# python main.py --visu
+# python main.py --knn --model_filter="yolo11x-seg" 
 
 # cleanup
 
