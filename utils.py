@@ -157,36 +157,66 @@ def load_distances(db_path):
                 db_path = alt2
 
     conn = sqlite3.connect(db_path)
-    # attempt common variants
+    # attempt common variants and support per-component directed distances (i, j, component, distance)
     df = None
     try:
-        df = pd.read_sql_query("SELECT i, j, distance FROM distances ORDER BY i, j", conn)
+        df = pd.read_sql_query("SELECT i, j, component, distance FROM distances ORDER BY component, i, j", conn)
+        has_component = True
     except Exception:
+        has_component = False
         try:
-            df = pd.read_sql_query("SELECT i, j, dist FROM distances ORDER BY i, j", conn)
+            df = pd.read_sql_query("SELECT i, j, distance FROM distances ORDER BY i, j", conn)
         except Exception:
-            # scan tables for a likely distances table
             try:
-                tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)
-                for t in tables['name'].values:
-                    try:
-                        info = pd.read_sql_query(f"PRAGMA table_info({t})", conn)
-                        cols = info['name'].values.tolist()
-                        if ('i' in cols or 'row_i' in cols) and ('j' in cols or 'row_j' in cols) and (
-                            'distance' in cols or 'dist' in cols
-                        ):
-                            dist_col = 'distance' if 'distance' in cols else 'dist'
-                            df = pd.read_sql_query(f"SELECT i, j, {dist_col} FROM {t} ORDER BY i, j", conn)
-                            break
-                    except Exception:
-                        continue
+                df = pd.read_sql_query("SELECT i, j, dist FROM distances ORDER BY i, j", conn)
             except Exception:
-                df = None
+                # scan tables for a likely distances table
+                try:
+                    tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)
+                    for t in tables['name'].values:
+                        try:
+                            info = pd.read_sql_query(f"PRAGMA table_info({t})", conn)
+                            cols = info['name'].values.tolist()
+                            if ('i' in cols or 'row_i' in cols) and ('j' in cols or 'row_j' in cols) and (
+                                'distance' in cols or 'dist' in cols
+                            ):
+                                dist_col = 'distance' if 'distance' in cols else 'dist'
+                                df = pd.read_sql_query(f"SELECT i, j, {dist_col} FROM {t} ORDER BY i, j", conn)
+                                break
+                        except Exception:
+                            continue
+                except Exception:
+                    df = None
 
     conn.close()
     if df is None or df.shape[0] == 0:
         raise RuntimeError(f"Could not read distances from {original_path} (resolved to {db_path})")
 
+    # If component column is present, build a dict of directed matrices (no symmetrization)
+    if 'component' in df.columns:
+        # Group by component
+        comps = sorted(df['component'].unique())
+        # Determine unique ids across all rows
+        unique_ids = np.unique(np.concatenate([df['i'].values, df['j'].values]))
+        id_to_idx = {id_: idx for idx, id_ in enumerate(unique_ids)}
+        n = len(unique_ids)
+        print(f"Number of nodes: {n} (from {db_path})")
+        comp_mats = {}
+        for comp in comps:
+            comp_df = df[df['component'] == comp]
+            mat = np.full((n, n), np.nan, dtype=float)
+            for _, row in comp_df.iterrows():
+                i = int(row['i'])
+                j = int(row['j'])
+                d = float(row['distance'])
+                mat[id_to_idx[i], id_to_idx[j]] = d
+            comp_mats[comp] = mat
+        # If there's only a single component, return the matrix directly for backward compatibility
+        if len(comp_mats) == 1:
+            return list(comp_mats.values())[0]
+        return comp_mats
+
+    # legacy behavior: symmetric single distance column
     # Normalize column name to 'distance'
     if 'distance' in df.columns:
         rows = df[["i", "j", "distance"]].values
@@ -210,7 +240,6 @@ def load_distances(db_path):
     dist_matrix[i_idx, j_idx] = d_vals
     dist_matrix[j_idx, i_idx] = d_vals
     return dist_matrix
-
 
 # -----------------------------
 # Hyperparameter query helpers

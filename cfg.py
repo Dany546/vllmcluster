@@ -62,7 +62,15 @@ if not os.path.exists(model_ckpt_path):
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-def make_albumentations_pipeline(size, normalize=False):
+def make_albumentations_pipeline(size, normalize=False, convert_to_tensor=True):
+    """
+    Create an Albumentations pipeline for image preprocessing.
+    
+    Args:
+        size: Target size for longest edge
+        normalize: Whether to apply ImageNet normalization (mean/std subtraction)
+        convert_to_tensor: If True, converts to CHW tensor. If False, keeps as HWC numpy array (for YOLO)
+    """
     transforms = [
         A.LongestMaxSize(max_size=size), 
         A.PadIfNeeded(min_height=size, min_width=size, 
@@ -74,8 +82,12 @@ def make_albumentations_pipeline(size, normalize=False):
 
     if normalize:
         transforms += [A.Normalize(mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))]
-    # convert to tensor CHW
-    transforms += [ToTensorV2()]
+    
+    # Convert to tensor [0, 1] float32 CHW (unless skipped for YOLO)
+    # YOLO needs HWC uint8 to use its own internal processing
+    # DINO/CLIP need CHW float32 tensors
+    if convert_to_tensor:
+        transforms += [ToTensorV2()]
 
     return A.Compose(
         transforms,
@@ -84,9 +96,9 @@ def make_albumentations_pipeline(size, normalize=False):
     )
 
 augmentations = {
-    "yolo": make_albumentations_pipeline(640, normalize=False),
-    "dino": make_albumentations_pipeline(518, normalize=True),
-    "clip": make_albumentations_pipeline(224, normalize=False),
+    "yolo": make_albumentations_pipeline(640, normalize=False, convert_to_tensor=False),  # YOLO: HWC uint8, handles its own preprocessing
+    "dino": make_albumentations_pipeline(518, normalize=True, convert_to_tensor=True),     # DINO: CHW [0,1] normalized
+    "clip": make_albumentations_pipeline(224, normalize=False, convert_to_tensor=True),    # CLIP: CHW [0,1]
 }
 
 

@@ -222,8 +222,9 @@ class COCODataset(torch.utils.data.Dataset):
         else:
             transformed = self.transform(image=image_np, bboxes=bboxes, category_ids=category_ids)
 
-        # image comes as tensor CHW from ToTensorV2
-        image_t = transformed["image"].to(torch.float32)  # torch.Tensor CxHxW
+
+        image = transformed["image"]
+        image_t = image.to(torch.float32)  # torch.Tensor CxHxW
 
         transformed_bboxes = transformed.get("bboxes", [])
         transformed_labels = transformed.get("category_ids", [])
@@ -251,7 +252,15 @@ class COCODataset(torch.utils.data.Dataset):
         if self.seg:
             masks = transformed.get("masks", [])
             if len(masks):
-                masks_t = torch.stack([m.to(torch.uint8) for m in masks], dim=0)
+                # Convert masks to tensors (they may be numpy arrays or tensors depending on transform)
+                mask_tensors = []
+                for m in masks:
+                    if isinstance(m, torch.Tensor):
+                        mask_tensors.append(m.to(torch.uint8))
+                    else:
+                        # numpy array
+                        mask_tensors.append(torch.from_numpy(m).to(torch.uint8))
+                masks_t = torch.stack(mask_tensors, dim=0)
             else:
                 masks_t = torch.empty((0, D, D), dtype=torch.uint8)
             labels["masks"] = masks_t

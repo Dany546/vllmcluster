@@ -3,6 +3,7 @@ import os
 import sqlite3
 from joblib import Parallel, delayed
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -59,7 +60,7 @@ def init_db():
         )
     """)
 
-    conn.commit()
+    conn.commit() 
     conn.close()
 
 
@@ -424,7 +425,7 @@ def work_fn(args):
             
     try:
         # Use joblib to parallelize fold processing
-        results = Parallel(n_jobs=-1, backend="loky", verbose=1000)(
+        results = Parallel(n_jobs=1, backend="loky", verbose=1000)(
             delayed(_process_fold)(fold_id, tr_idx, te_idx)
             for fold_id, (tr_idx, te_idx) in enumerate(folds)
         )
@@ -499,7 +500,7 @@ def is_valid_target_array(targ_arr, n_samples, source_desc, target_name, logger)
 
 def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=-1, batch_size=32):
     logger = get_logger(True)
-    # Try to load precomputed distances (preferred); fall back to embeddings matrix
+    # Try to load precomputed distances 
     distances = None
     try:
         distances = load_distances(table_path)
@@ -512,22 +513,25 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
 
     # Load embeddings/metadata if available (may be in a parallel 'embeddings' DB)
     ids = X = hfs = mious = mconfs = cats = supercats = losses = None
-    try:
-        emb_path = table_path.replace("distances", "embeddings")
-        _emb_res = load_embeddings(emb_path)
-    except Exception:
-        try:
-            _emb_res = load_embeddings(table_path)
-        except Exception:
-            _emb_res = None
 
-    if _emb_res is not None:
-        try:
-            ids, X, hfs, mious, mconfs, cats, supercats, losses = _emb_res
-        except Exception:
-            # If load_embeddings returned a raw embedding matrix for lower-dim tables
-            X = _emb_res
-            ids = None
+    # infer distance size if distances is a dict of component matrices
+    dist_n = None
+    if distances is not None:
+        if isinstance(distances, dict):
+            try:
+                dist_n = next(iter(distances.values())).shape[0]
+            except Exception:
+                dist_n = None
+        else:
+            try:
+                dist_n = distances.shape[0]
+            except Exception:
+                dist_n = None
+    
+    emb_path = table_path.replace("distances", "embeddings")
+    _emb_res = load_embeddings(emb_path)
+    ids, X, hfs, mious, mconfs, cats, supercats, losses = _emb_res
+    # distances = X #
 
     targets = {
         "hit_freq": hfs,
@@ -541,7 +545,6 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
         "dfl_loss": losses.get("dfl_loss") if isinstance(losses, dict) else None,
         "seg_loss": losses.get("seg_loss") if isinstance(losses, dict) else None,
     }
-    # distances = X # 
     distances = load_distances(table_path.replace("embeddings", "distances"))
     # Use pre-generated deterministic fold indices for consistency
     folds = get_fold_indices(n_splits=args_list[0][3], random_state=42)
@@ -549,7 +552,15 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
     # Determine number of samples from distances or embeddings
     n_samples = None
     if distances is not None:
-        n_samples = distances.shape[0]
+        if isinstance(distances, dict):
+            # take first component matrix to infer size
+            try:
+                sample_mat = next(iter(distances.values()))
+                n_samples = sample_mat.shape[0]
+            except Exception:
+                n_samples = None
+        else:
+            n_samples = distances.shape[0]
     elif X is not None:
         try:
             n_samples = X.shape[0]
@@ -578,7 +589,7 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
             except Exception:
                 other_targ = np.asarray(other_df).squeeze()
 
-            valid = is_valid_target_array(other_targ, distances.shape[0], other_db, args[-1], logger)
+            valid = is_valid_target_array(other_targ, dist_n or (distances.shape[0] if distances is not None else None), other_db, args[-1], logger)
             if valid is None:
                 continue
             new_args = [valid] + new_args + [folds]
@@ -601,7 +612,7 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
                         logger.warning("Skipping task: Target column '%s' not found in %s", target_name, table_path)
                         continue
 
-            valid = is_valid_target_array(targ_arr, distances.shape[0], table_path, target_name, logger)
+            valid = is_valid_target_array(targ_arr, dist_n or (distances.shape[0] if distances is not None else None), table_path, target_name, logger)
             if valid is None:
                 continue
             new_args = [valid] + new_args + [folds]
@@ -628,7 +639,21 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
                 raise e
             new_args = [embeddings] + new_args
         else:
-            new_args = [distances] + new_args
+            # If distances DB contains per-component directed matrices (dict), select the component
+            comp_map = {"box_loss": "box", "cls_loss": "cls", "dfl_loss": "dfl", "seg_loss": "seg"}
+            target_name = args[-1]
+            if isinstance(distances, dict):
+                comp = comp_map.get(target_name, "total")
+                if comp in distances:
+                    new_args = [distances[comp]] + new_args
+                else:
+                    # If requested component not present, fall back to 'total' if available
+                    if "total" in distances:
+                        new_args = [distances["total"]] + new_args
+                    else:
+                        raise RuntimeError(f"Requested component '{comp}' not found in distances DB and no 'total' available")
+            else:
+                new_args = [distances] + new_args
         # append constructed task args to batch
         batch.append(new_args)
 
