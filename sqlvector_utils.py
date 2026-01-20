@@ -119,7 +119,7 @@ def create_embeddings_table(conn: Connection, dim: int, is_seg: bool = False):
             value TEXT
         )
     """)
-    cur.execute("INSERT OR REPLACE INTO metadata VALUES (?, ?)", ("dimension", str(dim)))
+    cur.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", ("dimension", str(dim)))
     cur.execute("CREATE INDEX IF NOT EXISTS idx_img_id ON embeddings(img_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_flag_cat ON embeddings(flag_cat)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_flag_supercat ON embeddings(flag_supercat)")
@@ -152,13 +152,35 @@ def deserialize_float32_array(blob: bytes, dim: int) -> np.ndarray:
     return arr
 
 def insert_embeddings_batch(conn: Connection, rows: List[Tuple[Any, ...]]):
-    """Insert or replace a batch of rows into embeddings table."""
+    """Insert or replace a batch of rows into embeddings table.
+
+    This function will attempt to use explicit column names based on the
+    existing `embeddings` table schema to avoid "table has N columns but M
+    values were supplied" errors when on-disk schema has extra columns.
+    """
     if not rows:
         return
     cur = conn.cursor()
     ncols = len(rows[0])
+
+    # Try to get the existing columns of the embeddings table
+    cols = None
+    try:
+        cur.execute("PRAGMA table_info(embeddings)")
+        cols = [r[1] for r in cur.fetchall()]
+    except Exception:
+        cols = None
+
     placeholders = ",".join(["?"] * ncols)
-    cur.executemany(f"INSERT OR REPLACE INTO embeddings VALUES ({placeholders})", rows)
+
+    if cols and len(cols) >= ncols:
+        # Use the first ncols columns from the table schema
+        col_list = ",".join(cols[:ncols])
+        cur.executemany(f"INSERT OR REPLACE INTO embeddings ({col_list}) VALUES ({placeholders})", rows)
+    else:
+        # Fallback: use positional INSERT (may fail if schema differs)
+        cur.executemany(f"INSERT OR REPLACE INTO embeddings VALUES ({placeholders})", rows)
+
     # Commit for both sqlite3 and APSW connections
     try:
         conn.commit()

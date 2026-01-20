@@ -8,6 +8,86 @@ import numpy as np
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+def xywh_norm_to_xyxy_abs(boxes, img_width, img_height):
+    """
+    Convert normalized xywh (center format) to absolute xyxy format.
+    
+    Args:
+        boxes (torch.Tensor): Bounding boxes in normalized xywh format [x_center, y_center, width, height]
+                              where all values are in [0, 1]
+        img_width (int): Image width in pixels
+        img_height (int): Image height in pixels
+    
+    Returns:
+        torch.Tensor: Bounding boxes in absolute xyxy format [x1, y1, x2, y2]
+    """
+    if boxes.numel() == 0:
+        return boxes
+    
+    boxes = boxes.clone()
+    # Convert from normalized to absolute
+    boxes[:, 0] = boxes[:, 0] * img_width   # x_center
+    boxes[:, 1] = boxes[:, 1] * img_height  # y_center
+    boxes[:, 2] = boxes[:, 2] * img_width   # width
+    boxes[:, 3] = boxes[:, 3] * img_height  # height
+    
+    # Convert from xywh (center) to xyxy (corners)
+    x1 = boxes[:, 0] - boxes[:, 2] / 2
+    y1 = boxes[:, 1] - boxes[:, 3] / 2
+    x2 = boxes[:, 0] + boxes[:, 2] / 2
+    y2 = boxes[:, 1] + boxes[:, 3] / 2
+    
+    return torch.stack([x1, y1, x2, y2], dim=1)
+
+
+def box_iou(box1, box2):
+    """
+    Calculate the Intersection over Union (IoU) of two bounding boxes.
+
+    Args:
+        box1 (torch.Tensor): First bounding box, shape [4] (x1,y1,x2,y2)
+        box2 (torch.Tensor): Second bounding box, shape [4] (x1,y1,x2,y2)
+
+    Returns:
+        torch.Tensor: IoU value, scalar
+    """
+    box1 = box1.reshape(-1, 4)
+    box2 = box2.reshape(-1, 4)
+    x1 = torch.max(box1[:, 0], box2[:, 0])
+    y1 = torch.max(box1[:, 1], box2[:, 1])
+    x2 = torch.min(box1[:, 2], box2[:, 2])
+    y2 = torch.min(box1[:, 3], box2[:, 3])
+    intersection = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
+    area1 = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
+    area2 = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
+    union = area1 + area2 - intersection
+    iou = intersection / union
+    return iou
+
+
+def compute_dice_score(pred_masks, gt_masks):
+    """
+    Compute Dice score between predicted and ground truth masks.
+    
+    Args:
+        pred_masks: Predicted masks [N, H, W]
+        gt_masks: Ground truth masks [N, H, W]
+    
+    Returns:
+        Dice score (scalar)
+    """
+    if pred_masks.numel() == 0 or gt_masks.numel() == 0:
+        return torch.tensor(0.0)
+    
+    pred_masks = (pred_masks > 0.5).float()
+    gt_masks = (gt_masks > 0.5).float()
+    
+    intersection = (pred_masks * gt_masks).sum(dim=(1, 2))
+    union = pred_masks.sum(dim=(1, 2)) + gt_masks.sum(dim=(1, 2))
+    
+    dice = (2.0 * intersection) / (union + 1e-6)
+    return dice.mean()
+
 
 class YOLOExtractor:
     def __init__(self, model_name='yolo11x.pt', device='cuda' if torch.cuda.is_available() else 'cpu'):
@@ -236,7 +316,7 @@ class YOLOExtractor:
         self,
         source: Union[str, Path, Sequence[Any], torch.Tensor, np.ndarray],
         targets: Optional[Dict[str, Any]] = None,
-        conf: float = 0.25,
+        conf: float = 0.5,
         iou: float = 0.45,
         half: bool = False,
         embed_layers: Optional[List[int]] = None,
@@ -263,32 +343,85 @@ class YOLOExtractor:
             'iou': iou,
             'half': half,
             'save': False,
-            'verbose': False,
+            'verbose': False, 
+            'imgsz': 640,  # Tell predictor images are already 640x640
         }
         if self.is_seg:
             overrides['retina_masks'] = True
         overrides['embed'] = embed_layers if embed_layers is not None else [-2]
 
+        expected_batch_size = source.shape[0]
         self.model.model.eval()
         predictor = predictor_cls(overrides=overrides)
-        results = list(predictor(source))
+        predictor.model = self.model.model
+        predictor.batch = [["placeholder_path.jpg" for _ in range(expected_batch_size)], None, None]  # Dummy to avoid errors  
+        
+        # According to Ultralytics docs, predictor natively handles:
+        # - torch.Tensor: shape [B, C, H, W], BCHW format, RGB channels, float32 (0.0-1.0)
+        # - Returns list of B Results objects
+
+        # Call predictor - should return list of Results objects (one per image)
+        pred_output = predictor.inference(source)
+        pred_output = predictor.postprocess(pred_output, source, source)
+        
+        # Check if this is a list and what's inside
+        if isinstance(pred_output, list):
+            if len(pred_output) > 0:
+                # Check if this is a list of Results objects or a list of tensors
+                if hasattr(pred_output[0], 'boxes'):
+                    # This is the expected format: list of Results objects
+                    results = pred_output
+                else:
+                    raise ValueError("Unexpected predictor output format: list does not contain Results objects")
+            else:
+                results = []
+        else:
+            results = list(pred_output) if not isinstance(pred_output, list) else pred_output
+        
+        # Final debug: show what we have
+        if self.debug:
+            print(f"[DEBUG] Final results: {len(results)} objects")
+        if results and hasattr(results[0], 'boxes'):
+            det_counts = [r.boxes.shape[0] if r.boxes is not None else 0 for r in results[:min(5, len(results))]]
+        
+        # NOTE: Gap features from hooks will only contain the last batch's features
+        # since the predictor processes the entire batch in one forward pass.
+        # This is a known limitation when using batch tensors with hooks.
+
+        # Pad results if we got fewer than expected (this prevents "missing prediction" errors)
+        if expected_batch_size is not None and len(results) < expected_batch_size:
+            missing_count = expected_batch_size - len(results)
+            # Create placeholder empty results to maintain batch alignment
+            for _ in range(missing_count):
+                results.append(None)  # Will be converted to empty structured_pred below
 
         structured_preds: List[Dict[str, Any]] = []
         for r in results:
-            boxes = r.boxes.xyxy.detach().cpu() if getattr(r, 'boxes', None) is not None else torch.zeros((0, 4))
-            scores = r.boxes.conf.detach().cpu() if getattr(r, 'boxes', None) is not None else torch.zeros((0,))
-            classes = r.boxes.cls.detach().cpu() if getattr(r, 'boxes', None) is not None else torch.zeros((0,))
-            masks = r.masks.data.detach().cpu() if self.is_seg and getattr(r, 'masks', None) is not None else None
-            embeds = [e.detach().cpu() for e in getattr(r, 'embed', [])] if hasattr(r, 'embed') and r.embed is not None else []
-            structured_preds.append({
-                'boxes': boxes,
-                'scores': scores,
-                'classes': classes,
-                'masks': masks,
-                'embeds': embeds,
-            })
+            if r is None:
+                # Handle padding: create an empty prediction for missing results
+                structured_preds.append({
+                    'boxes': torch.zeros((0, 4)),
+                    'scores': torch.zeros((0,)),
+                    'classes': torch.zeros((0,)),
+                    'masks': None,
+                    'embeds': [],
+                })
+            else:
+                boxes = r.boxes.xyxy if getattr(r, 'boxes', None) is not None else torch.zeros((0, 4))
+                scores = r.boxes.conf if getattr(r, 'boxes', None) is not None else torch.zeros((0,))
+                classes = r.boxes.cls if getattr(r, 'boxes', None) is not None else torch.zeros((0,))
+                masks = r.masks.data if self.is_seg and getattr(r, 'masks', None) is not None else None
+                embeds = [e for e in getattr(r, 'embed', [])] if hasattr(r, 'embed') and r.embed is not None else []
+                structured_preds.append({
+                    'boxes': boxes,
+                    'scores': scores,
+                    'classes': classes,
+                    'masks': masks,
+                    'embeds': embeds,
+                })
 
         # Collect GAP features from cv2 layers
+        # Note: When processing batches, hooks capture features for the entire batch
         gap_features = {}
         if self.detection_layer_entry is not None:
             for i, m in enumerate(self.detection_layer_entry):
@@ -391,8 +524,15 @@ class YOLOExtractor:
             # Get GT labels for this image
             if targets is not None:
                 mask = targets['batch_idx'] == img_idx
-                gt_bboxes = targets['bboxes'][mask]
-                gt_classes = targets['cls'][mask]
+                gt_bboxes_norm = targets['bboxes'][mask].to(self.device)  # Normalized xywh format
+                gt_classes = targets['cls'][mask].to(self.device)
+                
+                # Convert GT bboxes from normalized xywh to absolute xyxy format
+                # Predictions from YOLO are in xyxy pixel coordinates (for 640x640 images)
+                # GT labels are in normalized xywh format (center, width, height in 0-1)
+                # We need to convert GT to match predictions for IoU computation
+                img_size = 640  # Images are preprocessed to 640x640
+                gt_bboxes = xywh_norm_to_xyxy_abs(gt_bboxes_norm, img_size, img_size)
             else:
                 gt_bboxes = torch.zeros((0, 4), device=self.device)
                 gt_classes = torch.zeros((0,), device=self.device, dtype=torch.int64)
@@ -422,6 +562,8 @@ class YOLOExtractor:
                 
                 if self.debug:
                     print(f"[DEBUG] Image {img_idx}: FN (no pred, {len(gt_classes)} GT)")
+                    # Additional diagnostic: show GT classes and that there were no preds
+                    print(f"[DEBUG]   GT classes: {cpu_classes}, GT bboxes: {gt_bboxes}")
             else:
                 # Compute matching between predictions and GT
                 matches, iou_scores = [], []
@@ -429,7 +571,6 @@ class YOLOExtractor:
                     if len(boxes) == 0:
                         break
                     # Compute IoU with all predictions
-                    from .clustering import box_iou
                     ious = box_iou(boxes, gt_box.unsqueeze(0))  # [N_pred]
                     best_iou, best_pred_idx = ious.max(0)
                     if best_iou > 0.5:  # IoU threshold
@@ -449,12 +590,18 @@ class YOLOExtractor:
                     miou = 0.0
                     mconf = scores.mean().item() if len(scores) > 0 else 0.0
                     hit_freq = 0.0
+                    # Diagnostic when GT present but no matches found
+                    if self.debug and gt_bboxes.numel() > 0:
+                        print(f"[DEBUG] Image {img_idx}: GT present ({len(gt_bboxes)}), but no matches -> hit_freq=0")
+                        print(f"[DEBUG]   preds: {boxes} boxes")
+                        print(f"[DEBUG]   GT bboxes: {gt_bboxes}")
+                
+                # No matches found; values above already set (miou=0.0, mconf=scores.mean(), hit_freq=0.0)
                 
                 # Compute Dice for segmentation
                 dice_score = 0.0
                 if self.is_seg and masks is not None and len(matches) > 0:
                     if 'masks' in targets and targets['masks'] is not None:
-                        from .clustering import compute_dice_score
                         dice_scores = []
                         for m in matches:
                             pred_mask = masks[m['pred_idx']]

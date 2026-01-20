@@ -119,7 +119,7 @@ def test_yolo_with_original_image():
     
     # Test with raw ultralytics
     model = YOLO("yolov8s.pt")
-    results = model(orig_img, verbose=False)
+    results = model(orig_img, save=False, verbose=False)
     
     n_preds = len(results[0].boxes)
     print(f"Raw YOLO predictions: {n_preds}")

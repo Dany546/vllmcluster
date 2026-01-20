@@ -91,6 +91,7 @@ def cluster(args):
             model,
             model.split(".")[0],
             debug=args.debug,
+            store_individual_predictions=args.store_preds,
         )
 
         # Optionally save raw YOLO heads into the embeddings DB first
@@ -210,6 +211,11 @@ def parse_args():
         "--save-raw",
         action="store_true",
         help="Run model to save raw YOLO head predictions into embeddings DB",
+    )
+    parser.add_argument(
+        "--store-preds",
+        action="store_true",
+        help="Store per-detection predictions (bboxes/masks) in the embeddings DB (default: off)",
     )
     args = parser.parse_args()
     args.all = (not (args.cluster and args.visu and args.knn)) | args.all
