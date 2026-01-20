@@ -50,13 +50,14 @@ def init_db():
             num_folds INTEGER,
             cv_type TEXT,
             distance_metric TEXT,
+            feature_source TEXT,
             fold INTEGER,
             target TEXT,
             "mae/accuracy" REAL,
             r2 REAL,
             "correlation/ARI" REAL,
             "error_dist_corr" REAL,
-            PRIMARY KEY(model, k, random_state, num_folds, cv_type, distance_metric, fold, target)
+            PRIMARY KEY(model, k, random_state, num_folds, cv_type, distance_metric, feature_source, fold, target)
         )
     """)
 
@@ -271,7 +272,7 @@ def get_tasks(tables, neighbor_grid, RN, num_folds, distance_metric, model_filte
                 targets_for_pair = [t for t in targets_for_pair if t in target_filter]
             
             for k, target in itertools.product(neighbor_grid, targets_for_pair):
-                other_columns = {"target": target}
+                other_columns = {"target": target, "feature_source": "embeddings"}
                 if not already_computed(
                     table_pair, k, RN, num_folds, "kfold", distance_metric, other_columns, c
                 ):
@@ -321,6 +322,7 @@ def work_fn(args):
         distance_metric,
         target_name,
         folds,
+        feature_source,
     ) = args
 
     # folds are now pre-generated and passed directly
@@ -407,6 +409,7 @@ def work_fn(args):
                 "num_folds": len(folds),
                 "random_state": random_state,
                 "distance_metric": distance_metric,
+                "feature_source": feature_source,
                 "fold": fold_id,
                 "target": target_name,
                 "mae/accuracy": accuracy_score(y_test, y_pred)
@@ -500,38 +503,103 @@ def is_valid_target_array(targ_arr, n_samples, source_desc, target_name, logger)
 
 def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=-1, batch_size=32):
     logger = get_logger(True)
-    # Try to load precomputed distances 
-    distances = None
-    try:
-        distances = load_distances(table_path)
-    except Exception:
-        # Try alternative conventional locations
-        try:
-            distances = load_distances(table_path.replace("embeddings", "distances"))
-        except Exception:
-            distances = None
-
-    # Load embeddings/metadata if available (may be in a parallel 'embeddings' DB)
-    ids = X = hfs = mious = mconfs = cats = supercats = losses = None
-
-    # infer distance size if distances is a dict of component matrices
-    dist_n = None
-    if distances is not None:
-        if isinstance(distances, dict):
-            try:
-                dist_n = next(iter(distances.values())).shape[0]
-            except Exception:
-                dist_n = None
-        else:
-            try:
-                dist_n = distances.shape[0]
-            except Exception:
-                dist_n = None
+    import io
+    import torch
     
+    # Load embeddings/metadata from embeddings DB (needed for all targets)
     emb_path = table_path.replace("distances", "embeddings")
-    _emb_res = load_embeddings(emb_path)
-    ids, X, hfs, mious, mconfs, cats, supercats, losses = _emb_res
-    # distances = X #
+    try:
+        _emb_res = load_embeddings(emb_path)
+        ids, X, hfs, mious, mconfs, cats, supercats, losses = _emb_res
+        n_samples = X.shape[0] if X is not None else None
+    except Exception as e:
+        logger.error("Could not load embeddings metadata from %s: %s", emb_path, e)
+        return
+    
+    # Load all available feature sources
+    sources = {}
+    
+    # 1. Embeddings (concatenated embeddings from DB)
+    if X is not None:
+        sources["embeddings"] = X
+        logger.info("Loaded embeddings source: shape %s", X.shape)
+    
+    # 2. Precomputed distances
+    try:
+        distances_mat = load_distances(table_path)
+        if distances_mat is not None:
+            if isinstance(distances_mat, dict):
+                # Handle component-wise distances by storing the dict
+                sources["distances"] = distances_mat
+                shapes = [m.shape[0] for m in distances_mat.values() if hasattr(m, "shape")]
+                logger.info("Loaded distances source: %d components with shape %s", len(distances_mat), (shapes[0] if shapes else None, shapes[0] if shapes else None))
+            else:
+                sources["distances"] = distances_mat
+                logger.info("Loaded distances source: shape %s", distances_mat.shape)
+    except Exception as e:
+        logger.debug("Could not load precomputed distances: %s", e)
+    
+    if "distances" not in sources:
+        try:
+            distances_mat = load_distances(table_path.replace("embeddings", "distances"))
+            if distances_mat is not None:
+                sources["distances"] = distances_mat
+                logger.info("Loaded distances source from alternate path")
+        except Exception as e:
+            logger.debug("Could not load distances from alternate path: %s", e)
+    
+    # 3. GAP features (from features table)
+    try:
+        conn = sqlite3.connect(emb_path)
+        df_gap = pd.read_sql_query("SELECT COUNT(*) as cnt FROM features", conn)
+        conn.close()
+        if df_gap is not None and df_gap['cnt'].iloc[0] > 0:
+            conn = sqlite3.connect(emb_path)
+            df_gap = pd.read_sql_query("SELECT gap_features FROM features ORDER BY img_id", conn)
+            conn.close()
+            gap_list = []
+            for gap_bytes in df_gap['gap_features'].values:
+                if gap_bytes is not None:
+                    try:
+                        gap_dict = np.load(io.BytesIO(gap_bytes), allow_pickle=True).item()
+                        gap_feat = torch.cat([torch.from_numpy(gap_dict[k]) if isinstance(gap_dict[k], np.ndarray) else gap_dict[k] 
+                                            for k in sorted(gap_dict.keys())], dim=1)
+                        gap_list.append(gap_feat)
+                    except Exception:
+                        pass
+            if gap_list:
+                sources["gap"] = torch.cat(gap_list, dim=0).numpy().astype(np.float32)
+                logger.info("Loaded GAP source: shape %s", sources["gap"].shape)
+    except Exception as e:
+        logger.debug("Could not load GAP features: %s", e)
+    
+    # 4. DINO embeddings
+    try:
+        proj_dir = emb_path.replace("embeddings", "proj") if "embeddings" in emb_path else os.path.join(os.path.dirname(emb_path), "proj")
+        dino_db = os.path.join(proj_dir, "dino.db")
+        if os.path.exists(dino_db):
+            dino_emb = load_embeddings(dino_db, query="dino")
+            if dino_emb is not None:
+                sources["dino"] = dino_emb
+                logger.info("Loaded DINO source: shape %s", dino_emb.shape)
+    except Exception as e:
+        logger.debug("Could not load DINO embeddings: %s", e)
+    
+    # 5. CLIP embeddings
+    try:
+        proj_dir = emb_path.replace("embeddings", "proj") if "embeddings" in emb_path else os.path.join(os.path.dirname(emb_path), "proj")
+        clip_db = os.path.join(proj_dir, "clip.db")
+        if os.path.exists(clip_db):
+            clip_emb = load_embeddings(clip_db, query="clip")
+            if clip_emb is not None:
+                sources["clip"] = clip_emb
+                logger.info("Loaded CLIP source: shape %s", clip_emb.shape)
+    except Exception as e:
+        logger.debug("Could not load CLIP embeddings: %s", e)
+    
+    if not sources:
+        logger.error("No feature sources available for %s", table_name)
+        return
 
     targets = {
         "hit_freq": hfs,
@@ -545,154 +613,146 @@ def process_table(args_list, results, table_path, table_name, pbar=None, n_jobs=
         "dfl_loss": losses.get("dfl_loss") if isinstance(losses, dict) else None,
         "seg_loss": losses.get("seg_loss") if isinstance(losses, dict) else None,
     }
-    distances = load_distances(table_path.replace("embeddings", "distances"))
     # Use pre-generated deterministic fold indices for consistency
     folds = get_fold_indices(n_splits=args_list[0][3], random_state=42)
-
-    # Determine number of samples from distances or embeddings
-    n_samples = None
-    if distances is not None:
+    
+    # Process each feature source separately
+    for source_name, distances in sources.items():
+        logger.info("Processing feature source: %s for %d tasks", source_name, len(args_list))
+        
+        # Determine n_samples for this source
         if isinstance(distances, dict):
-            # take first component matrix to infer size
-            try:
-                sample_mat = next(iter(distances.values()))
-                n_samples = sample_mat.shape[0]
-            except Exception:
-                n_samples = None
+            shapes = [m.shape[0] for m in distances.values() if hasattr(m, "shape")]
+            n_samp = max(shapes) if shapes else None
         else:
-            n_samples = distances.shape[0]
-    elif X is not None:
-        try:
-            n_samples = X.shape[0]
-        except Exception:
-            n_samples = None
-    if n_samples is None:
-        raise RuntimeError(f"Could not determine number of samples for table {table_path}")
+            n_samp = distances.shape[0] if hasattr(distances, 'shape') else None
+        
+        # We'll construct task arguments on-the-fly and execute them in batches
+        batch = []
+        processed = 0
+        
+        for args in args_list:
+            new_args = list(args)
+            # handle targets coming from other model runs (args[0] like 'run.proj.id')
+            if "_" in args[0]:
+                root = os.path.dirname(table_path)
+                other_db = os.path.join(root, f"{args[0].split('_')[1]}.db")
+                try:
+                    other_df = load_embeddings(other_db, args[-1])
+                except Exception:
+                    logger.warning("Skipping task: could not load target '%s' from %s", args[-1], other_db)
+                    continue
+                try:
+                    other_targ = other_df[args[-1]].values
+                except Exception:
+                    other_targ = np.asarray(other_df).squeeze()
 
-    # We'll construct task arguments on-the-fly and execute them in batches
-    batch = []
-    processed = 0
-    logger = get_logger(True)
-    for args in args_list:
-        new_args = list(args)
-        # handle targets coming from other model runs (args[0] like 'run.proj.id')
-        if "_" in args[0]:
-            root = os.path.dirname(table_path)
-            other_db = os.path.join(root, f"{args[0].split('_')[1]}.db")
-            try:
-                other_df = load_embeddings(other_db, args[-1])
-            except Exception:
-                logger.warning("Skipping task: could not load target '%s' from %s", args[-1], other_db)
-                continue
-            try:
-                other_targ = other_df[args[-1]].values
-            except Exception:
-                other_targ = np.asarray(other_df).squeeze()
-
-            valid = is_valid_target_array(other_targ, dist_n or (distances.shape[0] if distances is not None else None), other_db, args[-1], logger)
-            if valid is None:
-                continue
-            new_args = [valid] + new_args + [folds]
-        else:
-            target_name = args[-1]
-            # If a preloaded target exists and is not None, use it
-            if target_name in targets and targets[target_name] is not None:
-                targ_arr = targets[target_name]
+                valid = is_valid_target_array(other_targ, n_samp, other_db, args[-1], logger)
+                if valid is None:
+                    continue
+                new_args = [valid] + new_args + [folds, source_name]
             else:
-                df_single = load_embeddings(table_path, query=target_name)
-                if isinstance(df_single, pd.DataFrame) and target_name in df_single.columns:
-                    targ_arr = df_single[target_name].values
+                target_name = args[-1]
+                # If a preloaded target exists and is not None, use it
+                if target_name in targets and targets[target_name] is not None:
+                    targ_arr = targets[target_name]
                 else:
-                    try:
-                        if hasattr(df_single, "squeeze"):
-                            targ_arr = df_single.squeeze().values if hasattr(df_single.squeeze(), "values") else df_single.squeeze()
-                        else:
-                            targ_arr = np.asarray(df_single)
-                    except Exception:
-                        logger.warning("Skipping task: Target column '%s' not found in %s", target_name, table_path)
-                        continue
-
-            valid = is_valid_target_array(targ_arr, dist_n or (distances.shape[0] if distances is not None else None), table_path, target_name, logger)
-            if valid is None:
-                continue
-            new_args = [valid] + new_args + [folds]
-        if "." in args[0]:  # need embeddings from projections
-            # args[0] is expected to be like '<run>.<proj>.<id>' or similar; extract the projection name
-            try:
-                parts = args[0].split('.')
-                proj_name = parts[1] if len(parts) > 1 else parts[0]
-            except Exception:
-                proj_name = args[0].replace('.', '_')
-
-            # Build a proj DB path relative to the embeddings DB
-            root = os.path.dirname(table_path)
-            if "embeddings" in root:
-                proj_dir = root.replace("embeddings", "proj")
-            else:
-                proj_dir = os.path.join(root, "proj")
-
-            proj_db = os.path.join(proj_dir, f"{proj_name}.db")
-
-            try:
-                embeddings = load_embeddings(proj_db, query=args[0].split('_')[0])
-            except Exception as e:
-                raise e
-            new_args = [embeddings] + new_args
-        else:
-            # If distances DB contains per-component directed matrices (dict), select the component
-            comp_map = {"box_loss": "box", "cls_loss": "cls", "dfl_loss": "dfl", "seg_loss": "seg"}
-            target_name = args[-1]
-            if isinstance(distances, dict):
-                comp = comp_map.get(target_name, "total")
-                if comp in distances:
-                    new_args = [distances[comp]] + new_args
-                else:
-                    # If requested component not present, fall back to 'total' if available
-                    if "total" in distances:
-                        new_args = [distances["total"]] + new_args
+                    df_single = load_embeddings(table_path, query=target_name)
+                    if isinstance(df_single, pd.DataFrame) and target_name in df_single.columns:
+                        targ_arr = df_single[target_name].values
                     else:
-                        raise RuntimeError(f"Requested component '{comp}' not found in distances DB and no 'total' available")
-            else:
-                new_args = [distances] + new_args
-        # append constructed task args to batch
-        batch.append(new_args)
+                        try:
+                            if hasattr(df_single, "squeeze"):
+                                targ_arr = df_single.squeeze().values if hasattr(df_single.squeeze(), "values") else df_single.squeeze()
+                            else:
+                                targ_arr = np.asarray(df_single)
+                        except Exception:
+                            logger.warning("Skipping task: Target column '%s' not found in %s", target_name, table_path)
+                            continue
 
-        # If batch is full, run it with joblib in parallel
-        if len(batch) >= batch_size:
+                valid = is_valid_target_array(targ_arr, n_samp, table_path, target_name, logger)
+                if valid is None:
+                    continue
+                new_args = [valid] + new_args + [folds, source_name]
+            
+            if "." in args[0]:  # need embeddings from projections
+                # args[0] is expected to be like '<run>.<proj>.<id>' or similar; extract the projection name
+                try:
+                    parts = args[0].split('.')
+                    proj_name = parts[1] if len(parts) > 1 else parts[0]
+                except Exception:
+                    proj_name = args[0].replace('.', '_')
+
+                # Build a proj DB path relative to the embeddings DB
+                root = os.path.dirname(table_path)
+                if "embeddings" in root:
+                    proj_dir = root.replace("embeddings", "proj")
+                else:
+                    proj_dir = os.path.join(root, "proj")
+
+                proj_db = os.path.join(proj_dir, f"{proj_name}.db")
+
+                try:
+                    embeddings = load_embeddings(proj_db, query=args[0].split('_')[0])
+                except Exception as e:
+                    raise e
+                new_args = [embeddings] + new_args
+            else:
+                # If distances DB contains per-component directed matrices (dict), select the component
+                comp_map = {"box_loss": "box", "cls_loss": "cls", "dfl_loss": "dfl", "seg_loss": "seg"}
+                target_name = args[-1]
+                if isinstance(distances, dict):
+                    comp = comp_map.get(target_name, "total")
+                    if comp in distances:
+                        new_args = [distances[comp]] + new_args
+                    else:
+                        # If requested component not present, fall back to 'total' if available
+                        if "total" in distances:
+                            new_args = [distances["total"]] + new_args
+                        else:
+                            logger.debug("Requested component '%s' not found for source %s, skipping", comp, source_name)
+                            continue
+                else:
+                    new_args = [distances] + new_args
+            # append constructed task args to batch
+            batch.append(new_args)
+
+            # If batch is full, run it with joblib in parallel
+            if len(batch) >= batch_size:
+                try:
+                    parallel_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
+                        delayed(work_fn)(b) for b in batch
+                    )
+                    # Each parallel result is a list of records (one per fold); extend results
+                    for pr in parallel_results:
+                        results.extend(pr)
+                except Exception as e:
+                    logger.error("Error running batch for table %s source %s: %s", table_name, source_name, e)
+                    raise
+                processed += len(batch)
+                if pbar is not None:
+                    try:
+                        pbar.update(len(batch))
+                    except Exception:
+                        pass
+                batch = []
+
+        # Process remaining tasks in the final batch
+        if len(batch) > 0:
             try:
                 parallel_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
                     delayed(work_fn)(b) for b in batch
                 )
-                # Each parallel result is a list of records (one per fold); extend results
                 for pr in parallel_results:
                     results.extend(pr)
             except Exception as e:
-                logger.error("Error running batch for table %s: %s", table_name, e)
+                logger.error("Error running final batch for table %s source %s: %s", table_name, source_name, e)
                 raise
-            processed += len(batch)
             if pbar is not None:
                 try:
                     pbar.update(len(batch))
                 except Exception:
                     pass
-            batch = []
-
-    # Process remaining tasks in the final batch
-    if len(batch) > 0:
-        try:
-            parallel_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
-                delayed(work_fn)(b) for b in batch
-            )
-            for pr in parallel_results:
-                results.extend(pr)
-        except Exception as e:
-            logger.error("Error running final batch for table %s: %s", table_name, e)
-            raise
-        if pbar is not None:
-            try:
-                pbar.update(len(batch))
-            except Exception:
-                pass
 
     return results
 
@@ -827,7 +887,7 @@ def plot_results(df):
 
 
 def KNN(args):
-    db_path = f"/CECI/home/ucl/irec/darimez/distances/"
+    db_path = f"/CECI/home/ucl/irec/darimez/embeddings/"
     all_tables = [
         os.path.join(db_path, file)
         for file in os.listdir(db_path)
@@ -883,7 +943,7 @@ def KNN(args):
         # Use fixed random seed for determinism across all hyperparameter combinations
         RN = 42
         num_folds = 10
-        distance_metric = "loss"
+        distance_metric = "euclidian"
         # Allow narrowing the grid to a subset of models via CLI: --model_filter "yolov11x-seg,other"
         model_filter = None
         if getattr(args, "model_filter", None):

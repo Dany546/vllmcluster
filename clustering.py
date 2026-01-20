@@ -322,7 +322,7 @@ class Clustering_layer:
                 gap_features = result['gap_features']
                 
                 # Validate that we got the right number of predictions
-                batch_size = images.shape[0] 
+                current_batch_size = images.shape[0]  # do not overwrite declared `batch_size`
                 
                 # Log debug info
                 if self.debug:
