@@ -186,37 +186,22 @@ class Clustering_layer:
         # dimension: infer from model output by running one batch or set explicitly
         # Here we infer from a dummy forward pass if possible
         # We'll assume model returns embeddings of shape [B, D] when called with images
-        # Use a small sample to infer dim
-        img_ids, sample_images, labels = next(iter(data_loader))
-        sample_images = sample_images.to(device) 
-        if "yolo" in self.model_name:
-            # Use new predictor-based approach for YOLO models
-            targets = self.model.labels_to_targets(labels, sample_images.shape[0]) if labels else None
-            result = self.model.run_with_predictor(
-                sample_images,
-                targets=targets,
-                conf=0.25,
-                iou=0.45,
-                embed_layers=[-2],
+        # Dimension will be inferred later only if needed. Avoid running model predictor here to prevent
+        # repeating expensive inference when embeddings are already present from a previous run.
+        dim = None
+        # For non-YOLO models, ensure the embeddings table schema exists (dim is only needed when creating it)
+        emb_cursor.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id INTEGER PRIMARY KEY,
+                img_id INTEGER,
+                embedding BLOB,
+                hit_freq REAL,
+                mean_iou REAL,
+                mean_conf REAL,
+                flag_cat INTEGER,
+                flag_supercat INTEGER
             )
-            gap_features = result['gap_features']
-            gap_list = [gap_features[k] for k in sorted(gap_features.keys())]
-            sample_emb = torch.cat(gap_list, dim=1) if gap_list else torch.zeros(sample_images.shape[0], 512, device=device)
-            dim = sample_emb.shape[1]
-        else:
-            # Non-YOLO models (DINO, CLIP)
-            emb_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS embeddings (
-                    id INTEGER PRIMARY KEY,
-                    img_id INTEGER,
-                    embedding BLOB,
-                    hit_freq REAL,
-                    mean_iou REAL,
-                    mean_conf REAL,
-                    flag_cat INTEGER,
-                    flag_supercat INTEGER
-                )
-            """)
+        """)
         
         emb_cursor.execute(
             """CREATE TABLE IF NOT EXISTS predictions_raw_heads (
@@ -267,10 +252,7 @@ class Clustering_layer:
             "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value INTEGER)"
         )
         emb_conn.commit()
-
-        create_embeddings_table(emb_conn, dim, is_seg=self.is_seg)
-
-        # Ensure 'predictions' table has required columns for compatibility with older DBs
+        # Embedding dimension `dim` will be determined after checking for existing embeddings (to avoid unnecessary inference).
         try:
             emb_cursor.execute("PRAGMA table_info(predictions)")
             existing_cols = [r[1] for r in emb_cursor.fetchall()]
@@ -292,338 +274,8 @@ class Clustering_layer:
         except Exception as e:
             self.logger.debug(f"Could not validate or migrate 'predictions' table: {e}")
 
-        # --- Insert embeddings while regenerating them ---
-        emb_conn.close()
-        emb_conn = sqlite3.connect(embeddings_db, timeout=30)
-        emb_cursor = emb_conn.cursor()
-        total_inserted = 0
-        
-        for batch_ids, (img_ids, images, labels) in enumerate(data_loader):
-            images = images.to(device)
-            if "yolo" in self.model_name:
-                # Use new predictor-based approach for YOLO models
-                # Use pre-loaded transformed images from dataloader (not file paths)
-                # because labels are also transformed to match the augmented images
-                
-                # Convert labels to ultralytics targets dict format for loss computation
-                targets = self.model.labels_to_targets(labels, images.shape[0]) if labels else None
-                
-                result = self.model.run_with_predictor(
-                    images,
-                    targets=targets,
-                    conf=0.25,  # Very low threshold to catch all detections
-                    iou=0.45,
-                    embed_layers=[-2, -1] if self.debug else [-2],
-                )
-                
-                # Extract structured predictions, losses, and features
-                structured_preds = result['predictions']
-                losses = result['losses']
-                gap_features = result['gap_features']
-                
-                # Validate that we got the right number of predictions
-                current_batch_size = images.shape[0]  # do not overwrite declared `batch_size`
-                
-                # Log debug info
-                if self.debug:
-                    n_dets = sum(len(p['boxes']) for p in structured_preds)
-                    self.logger.debug(f"Batch {batch_ids}: {n_dets} total detections across {len(structured_preds)} images") 
-                    self.logger.debug(f"Batch {batch_ids}: Prediction boxes per image: {[len(p['boxes']) for p in structured_preds]}")
-                    if losses:
-                        self.logger.debug(f"Losses available: {list(losses[0].keys())}")
-                
-                # Compute synthetic embeddings from GAP features (concatenate all heads)
-                try:
-                    gap_list = [gap_features[k] for k in sorted(gap_features.keys())]
-                    if gap_list:
-                        emb = torch.cat(gap_list, dim=1)
-                    else:
-                        emb = torch.zeros(len(structured_preds), 512, device=device)
-                except Exception as e:
-                    self.logger.warning(f"Error computing embeddings from features: {e}")
-                    emb = torch.zeros(len(structured_preds), 512, device=device)
-                
-                # Match predictions to targets and format outputs for DB insertion
-                self.model.debug = False  # Pass debug flag to extractor
-                outputs, all_output = self.model.process_yolo_batch(
-                    structured_preds, targets, labels, losses, emb, cat_to_super=cat_to_super
-                )
-            else:
-                emb = self.model(images)
-                outputs = None
-                all_output = None
-
-            rows = []
-            if "yolo" in self.model_name and outputs is not None:
-
-                if self.is_seg:
-                    for id, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
-                        miou, mconf, cat, supercat, hit_freq, dice = output[:6]
-                        # losses appended at end if compute_losses used; adapt if different
-                        # Use defaults if not present
-                        box_loss = output[6] if len(output) > 6 else 0.0
-                        cls_loss = output[7] if len(output) > 7 else 0.0
-                        dfl_loss = output[8] if len(output) > 8 else 0.0
-                        seg_loss = output[9] if len(output) > 9 else 0.0
-                        emb_bytes = serialize_float32_array(vec.numpy())
-                        row = (
-                            int((batch_ids * batch_size) + id),
-                            int(img_id),
-                            emb_bytes,
-                            float(hit_freq),
-                            float(miou),
-                            float(mconf),
-                            float(dice),
-                            int(cat),
-                            int(supercat),
-                            float(box_loss),
-                            float(cls_loss),
-                            float(dfl_loss),
-                            float(seg_loss),
-                        )
-                        rows.append(row)
-                else:
-                    for id, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
-                        miou, mconf, cat, supercat, hit_freq, dice = output[:6]
-                        box_loss = output[6] if len(output) > 6 else 0.0
-                        cls_loss = output[7] if len(output) > 7 else 0.0
-                        dfl_loss = output[8] if len(output) > 8 else 0.0
-                        emb_bytes = serialize_float32_array(vec.numpy())
-                        row = (
-                            int((batch_ids * batch_size) + id),
-                            int(img_id),
-                            emb_bytes,
-                            float(hit_freq),
-                            float(miou),
-                            float(mconf),
-                            int(cat),
-                            int(supercat),
-                            float(box_loss),
-                            float(cls_loss),
-                            float(dfl_loss),
-                        )
-                        rows.append(row)
-            else:
-                for id, (img_id, vec, label) in enumerate(zip(img_ids, emb.cpu(), labels["cls"])):
-                    cpu_labels = label.numpy()
-                    values, counts = np.unique(cpu_labels, return_counts=True)
-                    most_frequent_cat = int(values[np.argmax(counts)])
-                    super_cat = [cat_to_super[cat] for cat in cpu_labels]
-                    values2, counts2 = np.unique(super_cat, return_counts=True)
-                    most_frequent_supercat = int(values2[np.argmax(counts2)])
-                    emb_bytes = serialize_float32_array(vec.numpy())
-                    row = (
-                        int((batch_ids * batch_size) + id),
-                        int(img_id),
-                        emb_bytes,
-                        0.0, 0.0, 0.0, 0.0,
-                        0.0, 0.0, 0.0, 0.0,
-                    )
-                    rows.append(row)
-
-            if rows:
-                insert_embeddings_batch(emb_conn, rows)
-                total_inserted += len(rows)
-
-            # Save features and predictions for YOLO models
-            if "yolo" in self.model_name:
-                # Save GAP and bottleneck features
-                features_rows = []
-                bottleneck_features = result.get('bottleneck_features', {})
-                for id, img_id in enumerate(img_ids):
-                    # Save GAP features
-                    gap_feat_dict = {k: v[id].cpu().numpy() if isinstance(v, torch.Tensor) else v[id] 
-                                    for k, v in gap_features.items()}
-                    gap_feat_blob = json.dumps({k: v.tolist() if isinstance(v, np.ndarray) else v 
-                                               for k, v in gap_feat_dict.items()})
-                    
-                    # Save bottleneck features if available
-                    bottleneck_blob = None
-                    if bottleneck_features:
-                        bottleneck_dict = {k: v[id].cpu().numpy() if isinstance(v, torch.Tensor) else v[id] 
-                                         for k, v in bottleneck_features.items()}
-                        bottleneck_blob = json.dumps({k: v.tolist() if isinstance(v, np.ndarray) else v 
-                                                     for k, v in bottleneck_dict.items()})
-                    
-                    features_rows.append((
-                        int(img_id),
-                        gap_feat_blob,
-                        bottleneck_blob,
-                        int(time.time())
-                    ))
-                
-                if features_rows:
-                    emb_cursor.executemany(
-                        "INSERT OR REPLACE INTO features (img_id, gap_features, bottleneck_features, created_ts) VALUES (?, ?, ?, ?)",
-                        features_rows
-                    )
-                
-                # Save individual predictions (optional, controlled by flag)
-                if self.store_individual_predictions:
-                    pred_rows = []
-                    for id, img_id in enumerate(img_ids):
-                        # Guard against mismatched lengths (predictor may sometimes return fewer results)
-                        if id < len(structured_preds):
-                            pred = structured_preds[id]
-                        else:
-                            # Fallback empty prediction
-                            if self.debug:
-                                self.logger.warning(f"Batch {batch_ids}: missing prediction for image index {id} (img_id={img_id}); using empty prediction")
-                            pred = {
-                                'boxes': torch.zeros((0, 4)),
-                                'scores': torch.zeros((0,)),
-                                'classes': torch.zeros((0,)),
-                                'masks': None,
-                            }
-
-                        boxes = pred['boxes']  # [N, 4] xyxy
-                        scores = pred['scores']  # [N]
-                        classes = pred['classes']  # [N]
-                        masks = pred.get('masks')  # [N, H, W] if seg
-                        
-                        for box_idx in range(len(boxes)):
-                            box = boxes[box_idx]
-                            x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
-                            conf = scores[box_idx].item()
-                            cls_id = int(classes[box_idx].item())
-                            cls_name = f"class_{cls_id}"  # Could map to actual class names
-                            
-                            # Save mask if available
-                            mask_blob = None
-                            if masks is not None and box_idx < len(masks):
-                                mask_array = masks[box_idx].cpu().numpy().astype(np.float32)
-                                mask_blob = array_to_blob(mask_array)
-                            
-                            pred_rows.append((
-                                int(img_id),
-                                float(x1),
-                                float(y1),
-                                float(x2),
-                                float(y2),
-                                float(conf),
-                                cls_id,
-                                cls_name,
-                                mask_blob,
-                                int(time.time())
-                            ))
-                    if pred_rows:
-                        emb_cursor.executemany(
-                            "INSERT INTO predictions_individual (img_id, box_x1, box_y1, box_x2, box_y2, confidence, class_id, class_name, mask, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            pred_rows
-                        )
-            
-            emb_conn.commit()
-        # If some samples were skipped because the dataloader dropped the last incomplete batch,
-        # process remaining indices explicitly to ensure all images are embedded.
-        if total_inserted < len(data_loader.dataset):
-            missing = len(data_loader.dataset) - total_inserted
-            self.logger.info(f"Detected {missing} missing embeddings; processing remaining samples manually")
-            start_idx = total_inserted
-            for i in range(start_idx, len(data_loader.dataset), batch_size):
-                chunk_idx = list(range(i, min(i + batch_size, len(data_loader.dataset))))
-                # fetch dataset items and collate into a batch
-                data = [data_loader.dataset.__getitem__(idx) for idx in chunk_idx]
-                img_ids, images, labels = data_loader.dataset.collate_fn(data)
-                images = images.to(device)
-
-                if "yolo" in self.model_name:
-                    targets = self.model.labels_to_targets(labels, images.shape[0]) if labels else None
-                    result = self.model.run_with_predictor(
-                        images,
-                        targets=targets,
-                        conf=0.25,
-                        iou=0.45,
-                        embed_layers=[-2, -1] if self.debug else [-2],
-                    )
-                    structured_preds = result.get('predictions', [])
-                    gap_features = result.get('gap_features', {})
-                    try:
-                        gap_list = [gap_features[k] for k in sorted(gap_features.keys())]
-                        emb = torch.cat(gap_list, dim=1) if gap_list else torch.zeros(len(structured_preds), 512, device=device)
-                    except Exception as e:
-                        self.logger.warning(f"Error computing embeddings for manual chunk starting at {i}: {e}")
-                        emb = torch.zeros(len(structured_preds), 512, device=device)
-                    outputs, all_output = self.model.process_yolo_batch(
-                        structured_preds, targets, labels, result.get('losses', None), emb, cat_to_super=cat_to_super
-                    )
-                else:
-                    emb = self.model(images)
-                    outputs = None
-                    all_output = None
-
-                rows = []
-                if "yolo" in self.model_name and outputs is not None:
-                    if self.is_seg:
-                        for id_in_chunk, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
-                            miou, mconf, cat, supercat, hit_freq, dice = output[:6]
-                            box_loss = output[6] if len(output) > 6 else 0.0
-                            cls_loss = output[7] if len(output) > 7 else 0.0
-                            dfl_loss = output[8] if len(output) > 8 else 0.0
-                            seg_loss = output[9] if len(output) > 9 else 0.0
-                            emb_bytes = serialize_float32_array(vec.numpy())
-                            row = (
-                                int(total_inserted + id_in_chunk),
-                                int(img_id),
-                                emb_bytes,
-                                float(hit_freq),
-                                float(miou),
-                                float(mconf),
-                                float(dice),
-                                int(cat),
-                                int(supercat),
-                                float(box_loss),
-                                float(cls_loss),
-                                float(dfl_loss),
-                                float(seg_loss),
-                            )
-                            rows.append(row)
-                    else:
-                        for id_in_chunk, (img_id, vec, output) in enumerate(zip(img_ids, emb.cpu(), outputs)):
-                            miou, mconf, cat, supercat, hit_freq, dice = output[:6]
-                            box_loss = output[6] if len(output) > 6 else 0.0
-                            cls_loss = output[7] if len(output) > 7 else 0.0
-                            dfl_loss = output[8] if len(output) > 8 else 0.0
-                            emb_bytes = serialize_float32_array(vec.numpy())
-                            row = (
-                                int(total_inserted + id_in_chunk),
-                                int(img_id),
-                                emb_bytes,
-                                float(hit_freq),
-                                float(miou),
-                                float(mconf),
-                                int(cat),
-                                int(supercat),
-                                float(box_loss),
-                                float(cls_loss),
-                                float(dfl_loss),
-                            )
-                            rows.append(row)
-                else:
-                    for id_in_chunk, (img_id, vec, label) in enumerate(zip(img_ids, emb.cpu(), labels["cls"])):
-                        cpu_labels = label.numpy()
-                        values, counts = np.unique(cpu_labels, return_counts=True)
-                        most_frequent_cat = int(values[np.argmax(counts)])
-                        super_cat = [cat_to_super[cat] for cat in cpu_labels]
-                        values2, counts2 = np.unique(super_cat, return_counts=True)
-                        most_frequent_supercat = int(values2[np.argmax(counts2)])
-                        emb_bytes = serialize_float32_array(vec.numpy())
-                        row = (
-                            int(total_inserted + id_in_chunk),
-                            int(img_id),
-                            emb_bytes,
-                            0.0, 0.0, 0.0, 0.0,
-                            0.0, 0.0, 0.0, 0.0,
-                        )
-                        rows.append(row)
-                if rows:
-                    insert_embeddings_batch(emb_conn, rows)
-                    total_inserted += len(rows)
-            emb_conn.commit()
-
-        build_vector_index(emb_conn)
-        emb_conn.execute('INSERT OR REPLACE INTO metadata VALUES (?, ?)', ("total_count", str(total_inserted)))
-        emb_conn.commit()
-        emb_conn.close()
+# Removed redundant early embedding pass. Embedding extraction and feature/prediction saving
+        # are performed in the canonical 'Step 1: Check and compute embeddings' pass below.
 
         # Optionally keep distances DB for other uses, but we no longer precompute all pairwise distances here.
         # If you still need a distances DB for compatibility, you can keep creating it but leave it empty or compute on demand.
@@ -631,7 +283,11 @@ class Clustering_layer:
         dist_conn.execute("PRAGMA journal_mode=WAL")
         dist_conn.execute("PRAGMA synchronous=OFF")
         dist_conn.execute("PRAGMA temp_store=MEMORY")
-        dist_conn.execute("PRAGMA cache_size=-20000")
+        dist_conn.execute("PRAGMA cache_size=-1024000")  # 1GB cache for large distance matrix
+        dist_conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
+        dist_conn.execute("PRAGMA locking_mode=EXCLUSIVE")  # Single-writer optimization
+        dist_conn.execute("PRAGMA automatic_index=OFF")  # Prevent auto-index during inserts
+        dist_conn.execute("PRAGMA wal_autocheckpoint=0")  # Disable auto-checkpoint during writes
         dist_cursor = dist_conn.cursor()
         # Create distances table with a 'component' column (component-aware distances)
         dist_cursor.execute("""
@@ -659,17 +315,82 @@ class Clustering_layer:
         emb_cursor = emb_conn.cursor()
         emb_cursor.execute('SELECT value FROM metadata WHERE key = "total_count"')
         result = emb_cursor.fetchone()
-        existing_count = result[0] if result else 0
+        metadata_count = int(result[0]) if result else 0
 
-        if existing_count == 0:
+        # Verify metadata against actual embeddings table to avoid resuming from stale metadata
+        try:
+            emb_cursor.execute('SELECT COUNT(*) FROM embeddings')
+            actual_count = int(emb_cursor.fetchone()[0])
+        except Exception as e:
+            self.logger.warning(f"Could not get actual embedding count from DB: {e}")
+            actual_count = metadata_count
+
+        if metadata_count != actual_count:
+            # Prefer the actual table count (more reliable) and fix metadata
+            self.logger.warning(f"Metadata total_count={metadata_count} inconsistent with actual embeddings count={actual_count}. Using actual count and repairing metadata.")
+            metadata_count = actual_count
+            try:
+                emb_cursor.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', ("total_count", str(metadata_count)))
+                emb_conn.commit()
+            except Exception as e:
+                self.logger.warning(f"Failed to repair metadata.total_count: {e}")
+
+        if metadata_count == 0:
             self.logger.info("Computing embeddings from scratch...")
         else:
-            self.logger.info(f"Found {existing_count} existing embeddings ...")
+            self.logger.info(f"Found {metadata_count} existing embeddings ...")
 
-        idx = int(existing_count)
+        idx = int(metadata_count)
         new_embeddings = 0
+
+        # Determine embedding dimension `dim` now that we can inspect the embeddings DB
+        if idx > 0:
+            try:
+                emb_cursor.execute("SELECT embedding FROM embeddings LIMIT 1")
+                row = emb_cursor.fetchone()
+                if row and row[0]:
+                    arr = np.frombuffer(row[0], dtype=np.float32)
+                    dim = int(arr.shape[0])
+                    self.logger.info(f"Inferred embedding dim={dim} from existing embeddings")
+                else:
+                    dim = 512
+                    self.logger.warning("Could not infer dim from DB, defaulting to 512")
+            except Exception as e:
+                dim = 512
+                self.logger.warning(f"Failed to infer dim from DB: {e}. Defaulting to {dim}")
+        else:
+            # Need to infer dim by running a single sample through the model (only once)
+            self.logger.info("Inferring embedding dimension from a sample batch (single run)")
+            img_ids, sample_images, labels = next(iter(data_loader))
+            sample_images = sample_images.to(device)
+            if "yolo" in self.model_name:
+                targets = self.model.labels_to_targets(labels, sample_images.shape[0]) if labels else None
+                result = self.model.run_with_predictor(
+                    sample_images,
+                    targets=targets,
+                    conf=0.25,
+                    iou=0.45,
+                    embed_layers=[-2],
+                )
+                gap_features = result.get('gap_features', {})
+                gap_list = [gap_features[k] for k in sorted(gap_features.keys())]
+                sample_emb = torch.cat(gap_list, dim=1) if gap_list else torch.zeros(sample_images.shape[0], 512, device=device)
+                dim = sample_emb.shape[1]
+            else:
+                emb_sample = self.model(sample_images)
+                dim = emb_sample.shape[1]
+
+        # Now ensure embeddings table exists with proper dim
+        create_embeddings_table(emb_conn, dim, is_seg=self.is_seg)
+
+        # Only compute embeddings if not all are done
         if idx < len(data_loader.dataset):
-            data_loader.start_idx = existing_count
+            self.logger.info(f"Computing remaining {len(data_loader.dataset) - idx} embeddings...")
+            self.logger.info(f"Using {self.model_name} model for embedding extraction")
+            # If the dataloader supports a start index, set it to the number of already-present embeddings
+            # (some dataloader implementations respect `start_idx` to resume iteration cheaply)
+            if hasattr(data_loader, 'start_idx'):
+                data_loader.start_idx = idx
             for batch_ids, (img_ids, images, labels) in enumerate(data_loader):
                 images = images.to(device)
                 if "yolo" in self.model_name:
@@ -817,19 +538,102 @@ class Clustering_layer:
                         "INSERT OR IGNORE INTO embeddings (id, img_id, embedding, hit_freq, mean_iou, mean_conf, flag_cat, flag_supercat) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         row,
                     )
+
+                # Save GAP and bottleneck features
+                if "yolo" in self.model_name and 'result' in locals():
+                    features_rows = []
+                    bottleneck_features = result.get('bottleneck_features', {})
+                    gap_features_local = result.get('gap_features', {})
+                    structured_preds_local = result.get('predictions', [])
+                    for id, img_id in enumerate(img_ids):
+                        gap_feat_dict = {k: v[id].cpu().numpy() if isinstance(v, torch.Tensor) else v[id] 
+                                        for k, v in gap_features_local.items()}
+                        gap_feat_blob = json.dumps({k: v.tolist() if isinstance(v, np.ndarray) else v 
+                                                   for k, v in gap_feat_dict.items()})
+
+                        bottleneck_blob = None
+                        if bottleneck_features:
+                            bottleneck_dict = {k: v[id].cpu().numpy() if isinstance(v, torch.Tensor) else v[id] 
+                                              for k, v in bottleneck_features.items()}
+                            bottleneck_blob = json.dumps({k: v.tolist() if isinstance(v, np.ndarray) else v 
+                                                         for k, v in bottleneck_dict.items()})
+
+                        features_rows.append((
+                            int(img_id),
+                            gap_feat_blob,
+                            bottleneck_blob,
+                            int(time.time()),
+                        ))
+                    if features_rows:
+                        emb_cursor.executemany(
+                            "INSERT OR REPLACE INTO features (img_id, gap_features, bottleneck_features, created_ts) VALUES (?, ?, ?, ?)",
+                            features_rows,
+                        )
+
+                    # Save individual predictions (optional)
+                    if self.store_individual_predictions and structured_preds_local is not None:
+                        pred_rows = []
+                        for id, img_id in enumerate(img_ids):
+                            if id < len(structured_preds_local):
+                                pred = structured_preds_local[id]
+                            else:
+                                if self.debug:
+                                    self.logger.warning(f"Batch {batch_ids}: missing prediction for image index {id} (img_id={img_id}); using empty prediction")
+                                pred = {
+                                    'boxes': torch.zeros((0, 4)),
+                                    'scores': torch.zeros((0,)),
+                                    'classes': torch.zeros((0,)),
+                                    'masks': None,
+                                }
+
+                            boxes = pred['boxes']
+                            scores = pred['scores']
+                            classes = pred['classes']
+                            masks = pred.get('masks')
+
+                            for box_idx in range(len(boxes)):
+                                box = boxes[box_idx]
+                                x1, y1, x2, y2 = box[0].item(), box[1].item(), box[2].item(), box[3].item()
+                                conf = scores[box_idx].item()
+                                cls_id = int(classes[box_idx].item())
+                                cls_name = f"class_{cls_id}"
+
+                                mask_blob = None
+                                if masks is not None and box_idx < len(masks):
+                                    mask_array = masks[box_idx].cpu().numpy().astype(np.float32)
+                                    mask_blob = array_to_blob(mask_array)
+
+                                pred_rows.append((
+                                    int(img_id),
+                                    float(x1),
+                                    float(y1),
+                                    float(x2),
+                                    float(y2),
+                                    float(conf),
+                                    cls_id,
+                                    cls_name,
+                                    mask_blob,
+                                    int(time.time()),
+                                ))
+                        if pred_rows:
+                            emb_cursor.executemany(
+                                "INSERT INTO predictions_individual (img_id, box_x1, box_y1, box_x2, box_y2, confidence, class_id, class_name, mask, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                pred_rows,
+                            )
+
                 emb_conn.commit()
                 idx += len(images)
-                new_embeddings += len(images)
+                new_embeddings += len(images) 
 
+        emb_cursor.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', ("total_count", str(idx)))
+        emb_conn.commit()
         if new_embeddings > 0:
-            emb_cursor.execute(
-                'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', ("total_count", str(idx))
-            )
-            emb_conn.commit()
-            self.logger.info(f"Added {new_embeddings} new embeddings. Total: {idx}")
+            self.logger.info(f"Embedding computation complete. Added {new_embeddings} new embeddings. Total: {idx}")
         else:
-            self.logger.info(f"All {existing_count} embeddings already computed")
+            self.logger.info(f"All {idx} embeddings already computed. Skipping embedding computation step.")
 
+        # Build vector index now that embeddings table is up-to-date
+        build_vector_index(emb_conn)
         emb_conn.close()
         emb_conn = sqlite3.connect(embeddings_db, timeout=30)
         emb_cursor = emb_conn.cursor()
@@ -847,9 +651,50 @@ class Clustering_layer:
         # Ensure we cover the final partial block even if the dataloader was created with drop_last=True
         n_blocks = (n_samples + batch_size - 1) // batch_size
 
-        self.logger.info(
-            f"Computing distances for {n_samples} samples ({n_blocks} x {n_blocks} blocks)..."
-        )
+        # Check for existing progress and resume from checkpoint
+        dist_cursor.execute("SELECT last_i, last_j FROM progress ORDER BY last_i DESC LIMIT 1")
+        progress_row = dist_cursor.fetchone()
+        if progress_row:
+            resume_i, resume_j = progress_row
+            self.logger.info(
+                f"Resuming distance computation from checkpoint: i_block={resume_i}, j_block={resume_j+1}"
+            )
+            start_i_block = resume_i
+            start_j_block = resume_j + 1  # Continue from next j_block
+            if start_j_block >= n_blocks:
+                # Completed all j_blocks for this i, move to next i
+                start_i_block += 1
+                start_j_block = 0
+        else:
+            # No explicit progress checkpoint. Check whether the distances table already contains rows
+            dist_cursor.execute("SELECT COUNT(*), MAX(i), MAX(j) FROM distances")
+            dist_info = dist_cursor.fetchone()
+            dist_count = int(dist_info[0]) if dist_info and dist_info[0] is not None else 0
+            if dist_count > 0:
+                max_i = int(dist_info[1]) if dist_info[1] is not None else 0
+                max_j = int(dist_info[2]) if dist_info[2] is not None else 0
+
+                # Infer resume blocks from highest indices observed in distances table
+                inferred_i_block = max_i // batch_size
+                inferred_j_block = (max_j // batch_size) + 1
+                if inferred_j_block >= n_blocks:
+                    inferred_i_block += 1
+                    inferred_j_block = 0
+
+                self.logger.info(f"Distances DB already contains {dist_count} rows; resuming from inferred position i_block={inferred_i_block}, j_block={inferred_j_block}")
+                start_i_block = inferred_i_block
+                start_j_block = inferred_j_block
+            else:
+                self.logger.info(
+                    f"Starting distance computation for {n_samples} samples ({n_blocks} x {n_blocks} blocks)..."
+                )
+                start_i_block = 0
+                start_j_block = 0
+        
+        if "yolo" in self.model_name:
+            self.logger.info(f"Distance computation method: YOLO training-mode loss (asymmetric)")
+        else:
+            self.logger.info(f"Distance computation method: Embedding L2 distance")
 
         def load_block(i_block):
             start = int(i_block * batch_size)
@@ -864,7 +709,7 @@ class Clustering_layer:
                 emb.append(np.frombuffer(blob, dtype=np.float32))
             return idx, torch.from_numpy(np.stack(emb)).to(device)
 
-        for i_block in range(n_blocks):
+        for i_block in range(start_i_block, n_blocks):
             try:
                 idx_i, emb_i = load_block(i_block)
             except Exception as e:
@@ -876,12 +721,11 @@ class Clustering_layer:
                 continue
             # For YOLO models, compute distances strictly from stored raw heads (class+seg loss).
             if "yolo" in self.model_name:
-                def load_head_block_map(block_idx):
-                    """Compute head tensors, final predictions, and original images for the block.
-
-                    Returns: (ids, id_to_heads, id_to_preds, id_to_images)
+                def load_predictions_for_block(block_idx):
+                    """Compute predictions for the block (expensive operation).
+                    
+                    Returns: (ids, id_to_preds) where id_to_preds maps img_id -> prediction dict
                     """
-                    # Compute head tensors for the block directly from the dataset.
                     start = int(block_idx * batch_size)
                     end = int(min((block_idx + 1) * batch_size, n_samples))
                     emb_cursor.execute(
@@ -899,112 +743,114 @@ class Clustering_layer:
                     result = self.model.run_with_predictor(images, conf=0.25, iou=0.45)
                     structured_preds = result['predictions']
                     
-                    # extract head tensors and store per-image original image tensors
-                    B = images.shape[0]  
+                    # Build mapping from image_id to predictions
                     id_to_preds = {}
-                    id_to_images = {}
-                    for i in range(B):
-                        preds_i = structured_preds[i] if i < len(structured_preds) else {'boxes': [], 'classes': []}
+                    for i in range(len(ids)):
+                        preds_i = structured_preds[i] if i < len(structured_preds) else {'boxes': torch.tensor([]), 'classes': torch.tensor([])}
                         id_to_preds[int(ids[i])] = preds_i
-
-                        id_to_images[int(ids[i])] = images[i].detach() 
-
-                    return ids, id_to_preds, id_to_images
-
-                # Full directed O(N^2) computation using YOLO training-mode per-image losses.
-                # Computes both A->B and B->A for all pairs to build complete asymmetric distance matrix
-                def preds_to_targets(preds_tensor: torch.Tensor):
-                    """Convert final_predictions tensor (Nx6 or Nx6+mask) to training-style targets dict.
                     
-                    Expected columns: x1,y1,x2,y2,conf,cls
-                    Returns dict with bboxes, cls, and batch_idx (all boxes treated as batch_idx=0 since single image).
-                    """
-                    if not isinstance(preds_tensor, torch.Tensor) or preds_tensor.numel() == 0:
-                        # Empty targets
-                        return {
-                            "bboxes": torch.zeros((0, 4), device=device, dtype=torch.float32),
-                            "cls": torch.zeros((0,), device=device, dtype=torch.int64),
-                            "batch_idx": torch.zeros((0,), device=device, dtype=torch.int64),
-                        }
-                    p = preds_tensor.to(device)
-                    # columns: x1,y1,x2,y2,conf,cls,...
-                    if p.dim() == 1:
-                        p = p.unsqueeze(0)
-                    bboxes = p[:, :4].float()
-                    cls = p[:, 5].long()
-                    n_boxes = bboxes.shape[0]
-                    batch_idx = torch.zeros((n_boxes,), device=device, dtype=torch.int64)  # single image = batch_idx 0
-                    return {"bboxes": bboxes, "cls": cls, "batch_idx": batch_idx, 'masks': None}
+                    return ids, id_to_preds
 
-                # preload heads for i_block
-                idx_i_heads, id2preds_i, id2images_i = load_head_block_map(i_block)
+                def load_images_for_block(block_idx):
+                    """Load images for the block (no inference).
+                    
+                    Returns: (ids, id_to_images) where id_to_images maps img_id -> image tensor on device
+                    """
+                    start = int(block_idx * batch_size)
+                    end = int(min((block_idx + 1) * batch_size, n_samples))
+                    emb_cursor.execute(
+                        "SELECT id, img_id FROM embeddings WHERE id >= ? AND id < ?",
+                        (start, end),
+                    )
+                    rows_local = emb_cursor.fetchall()
+                    data = [data_loader.dataset.__getitem__(rid[0]) for rid in rows_local]
+                    ids, images, _ = data_loader.dataset.collate_fn(data)
+                    images = images.to(device)
+                    
+                    # Build mapping from image_id to image tensors
+                    id_to_images = {}
+                    for i in range(len(ids)):
+                        id_to_images[int(ids[i])] = images[i].detach()
+                    
+                    return ids, id_to_images
+
+                # Compute i-block predictions ONCE before the j-loop (not N times)
+                self.logger.info(f"Computing YOLO predictions for i_block {i_block}/{n_blocks}...")
+                idx_i_heads, id2preds_i = load_predictions_for_block(i_block)
                 if len(idx_i_heads) == 0:
                     self.logger.debug(f"Empty head block at i_block={i_block}")
                     continue
+                self.logger.info(f"Computed predictions for i_block={i_block}: {len(idx_i_heads)} images with detections")
 
-                for j_block in range(0, n_blocks):
-                    idx_j_heads, id2preds_j, id2images_j = load_head_block_map(j_block)
+                # Accumulator for batching inserts
+                accumulated_rows = []
+                COMMIT_EVERY_N_BLOCKS = 50  # Batch commits every 50 block pairs
+
+                j_start = start_j_block if i_block == start_i_block else 0
+                for j_block in range(j_start, n_blocks):
+                    # Load ONLY images for j_block (no prediction computation)
+                    if j_block % 10 == 0 or j_block == n_blocks - 1:
+                        self.logger.info(f"  Computing losses: i_block={i_block}, j_block={j_block}/{n_blocks}")
+                    idx_j_heads, id2images_j = load_images_for_block(j_block)
                     if len(idx_j_heads) == 0:
-                        raise RuntimeError(f"Empty head block at j_block={j_block}")
+                        raise RuntimeError(f"Empty image block at j_block={j_block}")
 
-                    # A -> B (directed): run compute_losses on image A in training mode with B's predictions as targets
-                    rows = []
-                    self.model.model.model.train()  # ensure training mode for loss computation
+                    # Set model to training mode for loss computation
+                    self.model.model.model.train()
                     
-                    # For each image in block i
+                    # For each prediction in block i, compute loss against each image in block j
                     for i_idx, i_img_id in enumerate(idx_i_heads):
-                        # Get image i's features
-                        img_i = id2images_i[i_img_id]
+                        preds_i = id2preds_i[i_img_id]  # Predictions from image i (computed once)
                         
-                        # For each image in block j, use its predictions as targets
-                        for j_idx, j_img_id in enumerate(idx_j_heads):
-                            preds_j = id2preds_j[j_img_id]  # Predictions from image j (dict with boxes, classes, etc)
-                            
-                            # Convert predictions to targets format
-                            if isinstance(preds_j, dict) and 'boxes' in preds_j:
-                                # Structured predictions dict
-                                boxes = preds_j['boxes']  # [N, 4] xyxy
-                                classes = preds_j['classes']  # [N]
-                                masks = preds_j.get('masks', None)
+                        # Convert predictions to targets format
+                        if isinstance(preds_i, dict) and 'boxes' in preds_i:
+                            # Structured predictions dict
+                            boxes = preds_i['boxes']  # [N, 4] xyxy
+                            classes = preds_i['classes']  # [N]
+                            masks = preds_i.get('masks', None)
 
-                                if len(boxes) == 0:
-                                    # No predictions to use as targets
-                                    targets_j = {
-                                        "bboxes": torch.zeros((0, 4), device=device, dtype=torch.float32),
-                                        "cls": torch.zeros((0,), device=device, dtype=torch.int64),
-                                        "batch_idx": torch.zeros((0,), device=device, dtype=torch.int64),
-                                        "masks": None,
-                                    }
-                                else:
-                                    # Convert masks to a device tensor if present, otherwise leave as None
-                                    if masks is None:
-                                        masks_tensor = None
-                                    else:
-                                        if torch.is_tensor(masks):
-                                            masks_tensor = masks.to(device)
-                                        else:
-                                            masks_tensor = torch.tensor(masks, device=device, dtype=torch.float32)
-
-                                    targets_j = {
-                                        "bboxes": boxes.to(device).float(),
-                                        "cls": classes.to(device).long(),
-                                        "batch_idx": torch.zeros(len(boxes), device=device, dtype=torch.int64),
-                                        "masks": masks_tensor,
-                                    }
-                            else:
-                                # Empty predictions
-                                targets_j = {
+                            if len(boxes) == 0:
+                                # No predictions to use as targets
+                                targets_i = {
                                     "bboxes": torch.zeros((0, 4), device=device, dtype=torch.float32),
                                     "cls": torch.zeros((0,), device=device, dtype=torch.int64),
                                     "batch_idx": torch.zeros((0,), device=device, dtype=torch.int64),
                                     "masks": None,
                                 }
+                            else:
+                                # Convert masks to a device tensor if present
+                                if masks is None:
+                                    masks_tensor = None
+                                else:
+                                    if torch.is_tensor(masks):
+                                        masks_tensor = masks.to(device)
+                                    else:
+                                        masks_tensor = torch.tensor(masks, device=device, dtype=torch.float32)
+
+                                targets_i = {
+                                    "bboxes": boxes.to(device).float(),
+                                    "cls": classes.to(device).long(),
+                                    "batch_idx": torch.zeros(len(boxes), device=device, dtype=torch.int64),
+                                    "masks": masks_tensor,
+                                }
+                        else:
+                            # Empty predictions
+                            targets_i = {
+                                "bboxes": torch.zeros((0, 4), device=device, dtype=torch.float32),
+                                "cls": torch.zeros((0,), device=device, dtype=torch.int64),
+                                "batch_idx": torch.zeros((0,), device=device, dtype=torch.int64),
+                                "masks": None,
+                            }
+                        
+                        # For each image in j_block, compute how well i's predictions fit j's image
+                        for j_idx, j_img_id in enumerate(idx_j_heads):
+                            img_j = id2images_j[j_img_id]  # Image from j (no prediction inference needed)
                             
                             # Run forward pass in training mode to compute loss
-                            # Loss = how well predictions from j fit image i
+                            # Loss = how well predictions from i fit image j
                             try:
-                                targets_j = {**targets_j, "img": img_i.unsqueeze(0)}  # Add image i
-                                loss_output, loss_items = self.model.model.model(targets_j)
+                                targets_i_with_img = {**targets_i, "img": img_j.unsqueeze(0)}  # Add image j
+                                loss_output, loss_items = self.model.model.model(targets_i_with_img)
                                 
                                 # Extract per-component losses
                                 if isinstance(loss_items, torch.Tensor) and loss_items.numel() >= 3:
@@ -1016,24 +862,35 @@ class Clustering_layer:
                                     box_loss = cls_loss = dfl_loss = seg_loss = 0.0
                                 
                                 # Store distances for this pair
-                                rows.append((int(i_img_id), int(j_img_id), 'box', box_loss))
-                                rows.append((int(i_img_id), int(j_img_id), 'cls', cls_loss))
-                                rows.append((int(i_img_id), int(j_img_id), 'dfl', dfl_loss))
+                                accumulated_rows.append((int(i_img_id), int(j_img_id), 'box', box_loss))
+                                accumulated_rows.append((int(i_img_id), int(j_img_id), 'cls', cls_loss))
+                                accumulated_rows.append((int(i_img_id), int(j_img_id), 'dfl', dfl_loss))
                                 if self.is_seg:
-                                    rows.append((int(i_img_id), int(j_img_id), 'seg', seg_loss))
+                                    accumulated_rows.append((int(i_img_id), int(j_img_id), 'seg', seg_loss))
                             except Exception as e:
                                 self.logger.warning(f"Error computing loss for pair ({i_img_id}, {j_img_id}): {e}")
                                 # Skip this pair
                                 continue
                     
-                    # Insert all distances for this block pair
-                    if rows:
-                        dist_cursor.executemany(
-                            "INSERT OR REPLACE INTO distances (i, j, component, distance) VALUES (?, ?, ?, ?)",
-                            rows,
-                        )
-                        dist_conn.commit()
-                self.logger.debug(f"Completed head-based block row {i_block + 1}/{n_blocks}")
+                    # Commit accumulated rows every COMMIT_EVERY_N_BLOCKS block pairs
+                    if (j_block + 1) % COMMIT_EVERY_N_BLOCKS == 0 or j_block == n_blocks - 1:
+                        if accumulated_rows:
+                            dist_cursor.executemany(
+                                "INSERT OR REPLACE INTO distances (i, j, component, distance) VALUES (?, ?, ?, ?)",
+                                accumulated_rows,
+                            )
+                            dist_conn.commit()
+                            self.logger.debug(f"Committed {len(accumulated_rows)} distance rows for j_blocks up to {j_block}")
+                            accumulated_rows = []
+                    
+                    # Update progress checkpoint after each j_block completes
+                    dist_cursor.execute(
+                        "INSERT OR REPLACE INTO progress (last_i, last_j) VALUES (?, ?)",
+                        (int(i_block), int(j_block))
+                    )
+                    dist_conn.commit()
+                
+                self.logger.info(f"Completed distance computation for i_block {i_block + 1}/{n_blocks}")
                 # continue to next i_block
                 continue
 
@@ -1066,9 +923,18 @@ class Clustering_layer:
             dist_conn.commit()
             self.logger.debug(f"Completed block row {i_block + 1}/{n_blocks}")
 
-        self.logger.info("Distance computation complete")
+        self.logger.info("Distance computation complete. All pairwise distances computed and stored.")
+        
+        # Manually checkpoint WAL to prevent file bloat with synchronous=OFF
+        try:
+            dist_conn.execute("PRAGMA wal_checkpoint(RESTART)")
+            self.logger.info("Completed WAL checkpoint")
+        except Exception as e:
+            self.logger.warning(f"WAL checkpoint failed: {e}")
+        
+        self.logger.info(f"Results saved to: {embeddings_db} and {distances_db}")
         emb_conn.close()
         dist_conn.close()
 
-        self.logger.info(f"Inserted {total_inserted} embeddings into {embeddings_db} and built index")
+        self.logger.info(f"Inserted {idx} embeddings into {embeddings_db} and built index")
         return embeddings_db, distances_db
