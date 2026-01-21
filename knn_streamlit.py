@@ -399,7 +399,7 @@ else:
 
                 # build and show figure (use normalized plotting dataframe)
                 fig = make_cell_figure(df_plot, effective_models, effective_target, effective_metric, effective_k or None, effective_title, show_legend, [y_min, y_max] if (not pd.isna(y_min) and not pd.isna(y_max)) else None)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"plotly_chart_{cell_idx}")
 
                 # exports
                 html, png = fig_to_downloads(fig)
