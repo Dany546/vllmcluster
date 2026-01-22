@@ -66,7 +66,7 @@ def get_db_path():
     parser.add_argument("--local", action="store_true")
     # Use parse_known_args to avoid SystemExit when Streamlit passes its own CLI flags
     args, _ = parser.parse_known_args()
-
+    """
     Prefer a local copy at ~/knn_results.db if present, otherwise fall
     back to the CECI home location used on the cluster.
     """
