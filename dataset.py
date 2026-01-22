@@ -222,8 +222,15 @@ class COCODataset(torch.utils.data.Dataset):
         else:
             transformed = self.transform(image=image_np, bboxes=bboxes, category_ids=category_ids)
 
-        # image comes as tensor CHW from ToTensorV2
-        image_t = transformed["image"].to(torch.float32)  # torch.Tensor CxHxW
+
+        image = transformed["image"]
+        # Convert numpy array to torch tensor if needed (for YOLO: HWC uint8 -> CHW float32 [0-1])
+        # DINO/CLIP already converted by ToTensorV2 in augmentation pipeline
+        if isinstance(image, np.ndarray):
+            image = torch.from_numpy(image).permute(2, 0, 1).to(torch.float32) / 255.0  # HWC uint8 -> CHW [0, 1]
+        else:
+            image = image.to(torch.float32)  # Already a tensor, just ensure float32
+        image_t = image
 
         transformed_bboxes = transformed.get("bboxes", [])
         transformed_labels = transformed.get("category_ids", [])
@@ -251,7 +258,15 @@ class COCODataset(torch.utils.data.Dataset):
         if self.seg:
             masks = transformed.get("masks", [])
             if len(masks):
-                masks_t = torch.stack([m.to(torch.uint8) for m in masks], dim=0)
+                # Convert masks to tensors (they may be numpy arrays or tensors depending on transform)
+                mask_tensors = []
+                for m in masks:
+                    if isinstance(m, torch.Tensor):
+                        mask_tensors.append(m.to(torch.uint8))
+                    else:
+                        # numpy array
+                        mask_tensors.append(torch.from_numpy(m).to(torch.uint8))
+                masks_t = torch.stack(mask_tensors, dim=0)
             else:
                 masks_t = torch.empty((0, D, D), dtype=torch.uint8)
             labels["masks"] = masks_t
@@ -297,7 +312,6 @@ class COCODataset(torch.utils.data.Dataset):
         else:
             labels["masks"] = torch.empty((0, images.shape[2], images.shape[3]), dtype=torch.uint8)
 
-        print(images.type())
         return ids, images, labels
 
     

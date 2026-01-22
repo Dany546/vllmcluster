@@ -1,4 +1,4 @@
-import itertools
+check_db_status_project.pyimport itertools
 import json
 import logging
 import os
@@ -261,6 +261,60 @@ def visualize_clusters(args):
             #     f"{table_name}",
             #     run,
             # )
+            # Fetch stored hyperparameters from proj DB (metadata.params) so we can display them on the plot
+            model_name = table.split(f"{os.sep}")[-1].split(".")[0]
+            try:
+                from sqlvector_projector import compute_run_id
+
+                proj_db = table.replace("embeddings", "proj")
+                conn = sqlite3.connect(proj_db)
+                cur = conn.cursor()
+
+                # derive run_ids from model_name + hyperparams (deterministic)
+                run_id_umap = compute_run_id(model_name, hyperparams["umap"])
+                run_id_tsne = compute_run_id(model_name, hyperparams["tsne"])
+
+                def _fetch_params(run_id, fallback):
+                    try:
+                        cur.execute("SELECT params FROM metadata WHERE run_id=?", (run_id,))
+                        r = cur.fetchone()
+                        if r and r[0]:
+                            return json.loads(r[0])
+                    except Exception:
+                        pass
+                    return fallback
+
+                umap_params = _fetch_params(run_id_umap, hyperparams["umap"])
+                tsne_params = _fetch_params(run_id_tsne, hyperparams["tsne"])
+
+                conn.close()
+
+                def _short_params(d, max_items=4):
+                    if not isinstance(d, dict):
+                        return str(d)
+                    items = list(d.items())
+                    # show up to max_items important keys in stable order
+                    s = ", ".join([f"{k}={v}" for k, v in items[:max_items]])
+                    if len(items) > max_items:
+                        s += ", ..."
+                    return s
+
+                subtitle = f"UMAP: {_short_params(umap_params)} | t-SNE: {_short_params(tsne_params)}"
+
+                # Short run labels (for legend) and full params for hover
+                run_short_umap = f"UMAP:{run_id_umap.split('_')[-1][:6]}"
+                run_short_tsne = f"t-SNE:{run_id_tsne.split('_')[-1][:6]}"
+                # Pass dicts directly so the plotting helper can pretty-print them
+                umap_params_full = umap_params if isinstance(umap_params, dict) else str(umap_params)
+                tsne_params_full = tsne_params if isinstance(tsne_params, dict) else str(tsne_params)
+
+            except Exception:
+                subtitle = None
+                run_short_umap = None
+                run_short_tsne = None
+                umap_params_full = None
+                tsne_params_full = None
+
             fig = log_plot_plotly(
                 df,
                 umap_col=["UMAP-0", "UMAP-1"],
@@ -269,6 +323,11 @@ def visualize_clusters(args):
                 superclass_cols=supercategories,
                 continuous_cols=["hit_freq", "mean_iou", "mean_conf"],
                 title="Embedding Visualization",
+                subtitle=subtitle,
+                umap_short=run_short_umap,
+                tsne_short=run_short_tsne,
+                umap_params_full=umap_params_full,
+                tsne_params_full=tsne_params_full,
             )
             run.log({f"{table_name}": fig})
 

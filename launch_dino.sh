@@ -2,12 +2,11 @@
 
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=2G
+#SBATCH --mem-per-cpu=3G
+#SBATCH --job-name=dino
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --constraint='TeslaL40s|TeslaA100|TeslaA100_80'
-#SBATCH --qos=preemptible
-#SBATCH --job-name=dino
 #SBATCH --output=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.out
 #SBATCH --error=/auto/home/users/d/a/darimez/MIRO/vllmcluster/job.err
 
@@ -25,17 +24,18 @@ cd ~/MIRO/vllmcluster
 # trap cleanup SIGINT SIGTERM EXIT
 
 # cd $GLOBALSCRATCH/dino
-# rm -rf embeddings/*clip*
-# rm -rf distances/*clip*
+# rm -rf embeddings/*vec*
+# rm -rf distances/*vec*
+# rm -rf proj/*
 # cd ~/MIRO/vllmcluster
 
 source dino/bin/activate 
-pytest -q test_cocodataset_augmentation_integration.py -s
-# python main.py --model="yolov8s-seg.pt,yolov8x-seg.pt,yolo12s-seg.pt,yolo12x-seg.pt" 
-# source visu/bin/activate
-# pip install ipywidgets IPython --quiet
+
+# python test_sqlvector_refactor.py
+# pytest -q test_cocodataset_augmentation_integration.py -s
+python main.py --cluster --model="yolo11x-seg.pt" 
 # python main.py --visu
-# python main.py --knn
+# python main.py --knn --model_filter="yolo11x-seg" 
 
 # cleanup
 

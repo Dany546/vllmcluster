@@ -79,9 +79,9 @@ def cluster(args):
         torch.manual_seed(42)
         dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=64,
+            batch_size=256,
             shuffle=False,
-            num_workers=3,
+            num_workers=8,
             drop_last=False,
             prefetch_factor=2,
             sampler=ResumeSampler(dataset),
@@ -91,7 +91,37 @@ def cluster(args):
             model,
             model.split(".")[0],
             debug=args.debug,
+            store_individual_predictions=args.store_preds,
         )
+
+        # Optionally save raw YOLO heads into the embeddings DB first
+        if getattr(args, "save_raw", False) and "yolo" in model:
+            conn = sqlite3.connect(clustering_layer.embeddings_db, timeout=30)
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS predictions_raw_heads (
+                        id INTEGER PRIMARY KEY,
+                        img_id INTEGER NOT NULL,
+                        model_name TEXT NOT NULL,
+                        head_blob BLOB NOT NULL,
+                        head_shapes TEXT NOT NULL,
+                        head_dtypes TEXT NOT NULL,
+                        anchors_info TEXT,
+                        features BLOB,
+                        created_ts INTEGER,
+                        UNIQUE(img_id, model_name)
+                    )"""
+            )
+            conn.commit()
+            for batch_idx, (img_ids, images, labels) in enumerate(dataloader):
+                images = images.to(device)
+                clustering_layer.model.predict_and_store_raw(
+                    images, img_ids, emb_conn=conn, model_name=clustering_layer.model_name
+                )
+            conn.close()
+            print(f"Saved raw heads for {clustering_layer.model_name} to {clustering_layer.embeddings_db}")
+            if not getattr(args, "cluster", False):
+                continue
+
         clustering_layer.distance_matrix_db(dataloader)
 
         if run and False:
@@ -128,7 +158,7 @@ def main(args):
         from evaluate_clusters import KNN
 
         KNN(args)
-    else:
+    else: 
         cluster(args)
 
 
@@ -158,9 +188,34 @@ def parse_args():
         help="Train KNN for conformable predictions",
     )
     parser.add_argument(
+        "--table",
+        default=None,
+        help="Comma-separated list of table basenames or full paths to run KNN on (optional). If provided, only these tables will be processed.",
+    )
+    parser.add_argument(
+        "--model_filter",
+        default=None,
+        help="Comma-separated substrings to filter which model pairs to run KNN on (e.g., 'yolov11x-seg')",
+    )
+    parser.add_argument(
+        "--targets",
+        default=None,
+        help="Comma-separated list of targets to run (e.g., 'mean_iou,cls_loss,seg_loss')",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="perform all steps, will override other flags if set",
+    )
+    parser.add_argument(
+        "--save-raw",
+        action="store_true",
+        help="Run model to save raw YOLO head predictions into embeddings DB",
+    )
+    parser.add_argument(
+        "--store-preds",
+        action="store_true",
+        help="Store per-detection predictions (bboxes/masks) in the embeddings DB (default: off)",
     )
     args = parser.parse_args()
     args.all = (not (args.cluster and args.visu and args.knn)) | args.all
