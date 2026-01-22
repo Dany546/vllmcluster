@@ -44,6 +44,7 @@ def create_grid_db(path: Optional[str] = None):
             feature_selection TEXT,
             extractor TEXT,
             extractor_params TEXT,
+            feature_source TEXT,
             knn_n INTEGER,
             knn_metric TEXT,
             fold INTEGER,
@@ -88,8 +89,8 @@ def _insert_with_retry(path: str, sql: str, params: Iterable[Any], max_retries: 
 def insert_grid_result(path: Optional[str], row: Dict[str, Any]):
     path = path or get_grid_db_path()
     sql = (
-        "INSERT INTO grid_results(run_id, embedding_model, target, aggregation, preproc, feature_selection, extractor, extractor_params, knn_n, knn_metric, fold, spearman, r2, mae, status, reason, ts)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO grid_results(run_id, embedding_model, target, aggregation, preproc, feature_selection, extractor, extractor_params, feature_source, knn_n, knn_metric, fold, spearman, r2, mae, status, reason, ts)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     )
     # Coerce certain fields to stable types to avoid losing info (e.g., reason)
     extractor_params = row.get('extractor_params')
@@ -115,6 +116,7 @@ def insert_grid_result(path: Optional[str], row: Dict[str, Any]):
         row.get('feature_selection'),
         row.get('extractor'),
         extractor_params,
+        row.get('feature_source', 'embeddings'),
         row.get('knn_n'),
         row.get('knn_metric'),
         row.get('fold'),
@@ -309,13 +311,20 @@ class DistancesDBReader:
         self.table = table
 
     def get_pairwise_distance_matrix(self, ids: List[int]) -> np.ndarray:
-        """Return an n x n matrix of distances for the given ids order."""
+        """Return an n x n symmetric matrix of distances for the given ids order.
+
+        If the stored distances are asymmetric (i.e., both (i,j) and (j,i)
+        exist with different values) we symmetrize by taking the mean of the
+        two available values. Missing entries are treated as NaNs during
+        symmetrization and replaced with a large finite value afterwards.
+        """
         n = len(ids)
         id_to_idx = {int(i): idx for idx, i in enumerate(ids)}
-        D = np.zeros((n, n), dtype=np.float32)
+        # use nan sentinel to detect missing entries
+        D = np.full((n, n), np.nan, dtype=float)
         con = sqlite3.connect(self.db_path)
         cur = con.cursor()
-        # read rows where i or j in ids
+        # read rows where i and j in ids
         q = f"SELECT i,j,dist FROM {self.table} WHERE i IN ({','.join('?'*n)}) AND j IN ({','.join('?'*n)})"
         params = [int(x) for x in ids] + [int(x) for x in ids]
         cur.execute(q, params)
@@ -323,22 +332,64 @@ class DistancesDBReader:
             if int(i) in id_to_idx and int(j) in id_to_idx:
                 D[id_to_idx[int(i)], id_to_idx[int(j)]] = float(d)
         con.close()
-        return D
+
+        # symmetrize by averaging available entries across (i,j) and (j,i)
+        D_sym = np.nanmean(np.stack([D, D.T]), axis=0)
+        # ensure diagonal zero
+        np.fill_diagonal(D_sym, 0.0)
+
+        # replace remaining NaNs (completely missing pairs) with a large value
+        finite_vals = D_sym[np.isfinite(D_sym)]
+        if finite_vals.size > 0:
+            fill_value = float(finite_vals.max() * 10.0)
+        else:
+            fill_value = 1e6
+        D_sym[~np.isfinite(D_sym)] = fill_value
+        return D_sym.astype(np.float32)
 
     def get_cross_distance_matrix(self, test_ids: List[int], train_ids: List[int]) -> np.ndarray:
-        """Return an n_test x n_train matrix of distances from test to train."""
+        """Return an n_test x n_train matrix of distances from test to train.
+
+        For asymmetric stored distances, we average (i,j) and (j,i) when both
+        directions are present. Missing entries are treated as NaNs and filled
+        with a large finite value afterwards.
+        """
         n_t = len(test_ids)
         n_tr = len(train_ids)
         train_map = {int(i): idx for idx, i in enumerate(train_ids)}
         test_map = {int(i): idx for idx, i in enumerate(test_ids)}
-        D = np.zeros((n_t, n_tr), dtype=np.float32)
+        D = np.full((n_t, n_tr), np.nan, dtype=float)
         con = sqlite3.connect(self.db_path)
         cur = con.cursor()
+        # read entries where i in test_ids and j in train_ids
         q = f"SELECT i,j,dist FROM {self.table} WHERE i IN ({','.join('?'*n_t)}) AND j IN ({','.join('?'*n_tr)})"
         params = [int(x) for x in test_ids] + [int(x) for x in train_ids]
         cur.execute(q, params)
         for i, j, d in cur.fetchall():
             if int(i) in test_map and int(j) in train_map:
                 D[test_map[int(i)], train_map[int(j)]] = float(d)
+
+        # read reverse-direction entries (i in train_ids, j in test_ids)
+        D_rev = np.full((n_tr, n_t), np.nan, dtype=float)
+        q2 = f"SELECT i,j,dist FROM {self.table} WHERE i IN ({','.join('?'*n_tr)}) AND j IN ({','.join('?'*n_t)})"
+        params2 = [int(x) for x in train_ids] + [int(x) for x in test_ids]
+        cur = con = sqlite3.connect(self.db_path)
+        cur2 = con.cursor()
+        cur2.execute(q2, params2)
+        for i, j, d in cur2.fetchall():
+            if int(i) in train_map and int(j) in test_map:
+                D_rev[train_map[int(i)], test_map[int(j)]] = float(d)
         con.close()
-        return D
+
+        # symmetrize by averaging available values
+        D_sym = np.nanmean(np.stack([D, D_rev.T]), axis=0)
+
+        # replace NaNs with large finite value
+        finite_vals = D_sym[np.isfinite(D_sym)]
+        if finite_vals.size > 0:
+            fill_value = float(finite_vals.max() * 10.0)
+        else:
+            fill_value = 1e6
+        D_sym[~np.isfinite(D_sym)] = fill_value
+
+        return D_sym.astype(np.float32)
