@@ -79,9 +79,9 @@ def cluster(args):
         torch.manual_seed(42)
         dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=64,
+            batch_size=256,
             shuffle=False,
-            num_workers=3,
+            num_workers=8,
             drop_last=False,
             prefetch_factor=2,
             sampler=ResumeSampler(dataset),

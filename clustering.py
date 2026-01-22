@@ -253,14 +253,41 @@ class Clustering_layer:
         )
         emb_conn.commit()
         # Embedding dimension `dim` will be determined after checking for existing embeddings (to avoid unnecessary inference).
+        # Ensure 'predictions' table exists with expected schema (create if missing)
         try:
+            emb_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='predictions'")
+            if not emb_cursor.fetchone():
+                if self.is_seg:
+                    emb_cursor.execute(
+                        """CREATE TABLE IF NOT EXISTS predictions (
+                            id INTEGER PRIMARY KEY,
+                            img_id INTEGER,
+                            iou BLOB,
+                            conf BLOB,
+                            dice BLOB,
+                            cat BLOB,
+                            supercat BLOB
+                        )"""
+                    )
+                else:
+                    emb_cursor.execute(
+                        """CREATE TABLE IF NOT EXISTS predictions (
+                            id INTEGER PRIMARY KEY,
+                            img_id INTEGER,
+                            iou BLOB,
+                            conf BLOB,
+                            cat BLOB,
+                            supercat BLOB
+                        )"""
+                    )
+                emb_conn.commit()
+
+            # Now validate and add any missing columns (non-destructive)
             emb_cursor.execute("PRAGMA table_info(predictions)")
             existing_cols = [r[1] for r in emb_cursor.fetchall()]
             required = ['id', 'img_id', 'iou', 'conf', 'cat', 'supercat']
-            if self.is_seg:
-                # segmentation models also expect 'dice'
-                if 'dice' not in existing_cols:
-                    required.insert(4, 'dice')
+            if self.is_seg and 'dice' not in existing_cols:
+                required.insert(4, 'dice')
             for c in required:
                 if c not in existing_cols:
                     if c == 'id':
@@ -382,6 +409,25 @@ class Clustering_layer:
 
         # Now ensure embeddings table exists with proper dim
         create_embeddings_table(emb_conn, dim, is_seg=self.is_seg)
+
+        # Ensure embeddings table contains the expected columns (add if missing). This handles older DBs
+        try:
+            emb_cursor.execute("PRAGMA table_info(embeddings)")
+            emb_cols = {r[1] for r in emb_cursor.fetchall()}
+            # Columns we may later insert into
+            expected_cols = {
+                'mean_dice', 'box_loss', 'cls_loss', 'dfl_loss', 'seg_loss'
+            }
+            for col in expected_cols:
+                if col not in emb_cols:
+                    try:
+                        emb_cursor.execute(f"ALTER TABLE embeddings ADD COLUMN {col} REAL DEFAULT 0.0")
+                        self.logger.info(f"Added missing column '{col}' to embeddings table")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to add column '{col}' to embeddings: {e}")
+            emb_conn.commit()
+        except Exception as e:
+            self.logger.warning(f"Could not validate or migrate 'embeddings' table: {e}")
 
         # Only compute embeddings if not all are done
         if idx < len(data_loader.dataset):
@@ -625,12 +671,23 @@ class Clustering_layer:
                 idx += len(images)
                 new_embeddings += len(images) 
 
-        emb_cursor.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', ("total_count", str(idx)))
+        # Recompute actual embedding count to avoid counting images that were skipped by INSERT OR IGNORE
+        try:
+            emb_cursor.execute('SELECT COUNT(*) FROM embeddings')
+            final_idx = int(emb_cursor.fetchone()[0])
+        except Exception as e:
+            self.logger.warning(f"Could not determine final embeddings count: {e}")
+            final_idx = idx
+
+        added = final_idx - metadata_count
+        emb_cursor.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', ("total_count", str(final_idx)))
         emb_conn.commit()
-        if new_embeddings > 0:
-            self.logger.info(f"Embedding computation complete. Added {new_embeddings} new embeddings. Total: {idx}")
+        if added > 0:
+            self.logger.info(f"Embedding computation complete. Added {added} new embeddings. Total: {final_idx}")
         else:
-            self.logger.info(f"All {idx} embeddings already computed. Skipping embedding computation step.")
+            self.logger.info(f"All {final_idx} embeddings already computed. Skipping embedding computation step.")
+        # use canonical final count for downstream steps
+        idx = final_idx
 
         # Build vector index now that embeddings table is up-to-date
         build_vector_index(emb_conn)
@@ -654,7 +711,7 @@ class Clustering_layer:
         # Check for existing progress and resume from checkpoint
         dist_cursor.execute("SELECT last_i, last_j FROM progress ORDER BY last_i DESC LIMIT 1")
         progress_row = dist_cursor.fetchone()
-        if progress_row:
+        if progress_row and False:
             resume_i, resume_j = progress_row
             self.logger.info(
                 f"Resuming distance computation from checkpoint: i_block={resume_i}, j_block={resume_j+1}"
@@ -667,23 +724,64 @@ class Clustering_layer:
                 start_j_block = 0
         else:
             # No explicit progress checkpoint. Check whether the distances table already contains rows
-            dist_cursor.execute("SELECT COUNT(*), MAX(i), MAX(j) FROM distances")
-            dist_info = dist_cursor.fetchone()
-            dist_count = int(dist_info[0]) if dist_info and dist_info[0] is not None else 0
+            dist_cursor.execute("SELECT COUNT(*) FROM distances")
+            (dist_count_raw,) = dist_cursor.fetchone()
+            dist_count = int(dist_count_raw) if dist_count_raw is not None else 0
             if dist_count > 0:
-                max_i = int(dist_info[1]) if dist_info[1] is not None else 0
-                max_j = int(dist_info[2]) if dist_info[2] is not None else 0
+                # Get distinct j and i values (these are image ids stored earlier)
+                dist_cursor.execute("SELECT DISTINCT j FROM distances")
+                distinct_j = [r[0] for r in dist_cursor.fetchall()]
+                dist_cursor.execute("SELECT DISTINCT i FROM distances")
+                distinct_i = [r[0] for r in dist_cursor.fetchall()]
 
-                # Infer resume blocks from highest indices observed in distances table
-                inferred_i_block = max_i // batch_size
-                inferred_j_block = (max_j // batch_size) + 1
-                if inferred_j_block >= n_blocks:
-                    inferred_i_block += 1
+                # Map image ids to embedding ids using the embeddings table
+                def map_img_ids_to_emb_ids(img_ids):
+                    if not img_ids:
+                        return {}
+                    placeholders = ",".join(["?"] * len(img_ids))
+                    try:
+                        emb_cursor.execute(f"SELECT img_id, id FROM embeddings WHERE img_id IN ({placeholders})", tuple(img_ids))
+                        return {r[0]: r[1] for r in emb_cursor.fetchall()}
+                    except Exception as e:
+                        self.logger.warning(f"Error mapping img_ids to embedding ids: {e}")
+                        return {}
+
+                mapped_j = map_img_ids_to_emb_ids(distinct_j)
+                mapped_i = map_img_ids_to_emb_ids(distinct_i)
+
+                set_j_emb = set(mapped_j.values())
+                set_i_emb = set(mapped_i.values())
+
+                # The remaining i ids to compute are those present as j but not present as i
+                missing_i_emb = sorted(set_j_emb - set_i_emb)
+
+                if missing_i_emb:
+                    # Start from the earliest missing embedding id
+                    first_missing = int(missing_i_emb[0])
+                    inferred_i_block = first_missing // batch_size
                     inferred_j_block = 0
+                    # clamp to valid range just in case
+                    if inferred_i_block >= n_blocks:
+                        inferred_i_block = n_blocks - 1
+                        inferred_j_block = 0
 
-                self.logger.info(f"Distances DB already contains {dist_count} rows; resuming from inferred position i_block={inferred_i_block}, j_block={inferred_j_block}")
-                start_i_block = inferred_i_block
-                start_j_block = inferred_j_block
+                    self.logger.info(
+                        f"Distances DB already contains {dist_count} rows; unique_j={len(distinct_j)}, unique_i={len(distinct_i)}; "
+                        f"resuming from first missing i embedding id={first_missing} -> i_block={inferred_i_block}, j_block={inferred_j_block}"
+                    )
+                    start_i_block = inferred_i_block
+                    start_j_block = inferred_j_block
+                else:
+                    # No missing i found from j set — fall back to mapping of max ids if possible
+                    emb_cursor.execute("SELECT MAX(id) FROM embeddings")
+                    max_emb = emb_cursor.fetchone()[0] or 0
+                    inferred_i_block = int(max_emb) // batch_size
+                    inferred_j_block = 0
+                    if inferred_i_block >= n_blocks:
+                        inferred_i_block = n_blocks - 1
+                    self.logger.info(f"Distances DB contains {dist_count} rows but no missing i found; resuming at block i_block={inferred_i_block}, j_block={inferred_j_block}")
+                    start_i_block = inferred_i_block
+                    start_j_block = inferred_j_block
             else:
                 self.logger.info(
                     f"Starting distance computation for {n_samples} samples ({n_blocks} x {n_blocks} blocks)..."
