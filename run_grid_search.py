@@ -65,15 +65,14 @@ def load_and_symmetrize_distances(distances_db_path, target: str | None = None, 
             try:
                 cur.execute("SELECT DISTINCT i FROM distances UNION SELECT DISTINCT j FROM distances")
                 db_ids = sorted([int(r[0]) for r in cur.fetchall()])
-            except Exception:
+            except Exception as err:
+                logger.warning(err)
                 db_ids = None
             conn.close()
             if db_ids is None or set(db_ids) != set(expected_ids):
                 logger.warning(
-                    "Distances DB %s incomplete (covered ids %s; expected %s); skipping distances-based task",
-                    distances_db_path,
-                    db_ids,
-                    expected_ids,
+                    "Distances DB %s incomplete; skipping distances-based task",
+                    distances_db_path
                 )
                 return None
     except Exception as e:

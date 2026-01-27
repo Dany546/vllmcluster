@@ -117,6 +117,8 @@ class YOLOExtractor:
         
         # Initialize criterion for loss computation
         self.model.model.criterion = self.model.model.init_criterion()
+        # Enable per-sample loss mode
+        self.model.model.criterion.return_per_sample_loss = True
         self.model.model.eval()
         
         self.detection_layer_entry = None

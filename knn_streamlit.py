@@ -28,7 +28,13 @@ if not hasattr(st, "experimental_rerun"):
         from streamlit.runtime.scriptrunner import RerunException
 
         def _st_experimental_rerun() -> None:
-            raise RerunException()
+            # Newer Streamlit requires a `rerun_data` argument; try the modern
+            # signature and fall back to the no-arg version for older releases.
+            try:
+                raise RerunException({})
+            except TypeError:
+                # Older Streamlit versions accept no args
+                raise RerunException()
 
         st.experimental_rerun = _st_experimental_rerun
     except Exception:
@@ -755,6 +761,48 @@ if page == "Statistics":
         }).round(4),
         use_container_width=True
     )
+
+elif page == "GridSearch":
+    st.header("🔍 GridSearch Results")
+    resolved_grid = os.path.expanduser(grid_db_path) if grid_db_path else ""
+
+    if resolved_grid and os.path.exists(resolved_grid):
+        df_grid = load_grid_results(resolved_grid)
+        if df_grid.empty:
+            st.warning("Grid search DB found but contains no rows.")
+        else:
+            st.write(f"Loaded GridSearch DB: {resolved_grid}")
+            st.dataframe(df_grid, use_container_width=True)
+
+            # determine a reasonable metric to plot
+            metric = None
+            for cand in ("spearman", "corr", "correlation/ARI", "mae", "mae/accuracy", "r2"):
+                if cand in df_grid.columns:
+                    metric = cand
+                    break
+
+            if metric:
+                st.write(f"Quick plots for metric: **{metric}**")
+                import plotly.express as px
+
+                df_plot_grid = df_grid.copy()
+                if "knn_n" in df_plot_grid.columns and "k" not in df_plot_grid.columns:
+                    df_plot_grid["k"] = df_plot_grid["knn_n"]
+                if "embedding_model" in df_plot_grid.columns and "model_full" not in df_plot_grid.columns:
+                    df_plot_grid["model_full"] = df_plot_grid["embedding_model"].astype(str)
+
+                if "k" in df_plot_grid.columns and "model_full" in df_plot_grid.columns:
+                    fig_box = px.box(df_plot_grid, x="k", y=metric, color="model_full", points="outliers", title=f"{metric} by k and model")
+                    st.plotly_chart(fig_box, use_container_width=True)
+                    fig_scatter = px.scatter(df_plot_grid, x="k", y=metric, color="model_full", title=f"{metric} vs k")
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+                else:
+                    fig_box = px.box(df_plot_grid, x=("model_full" if "model_full" in df_plot_grid.columns else None), y=metric, points="outliers", title=f"{metric} by model")
+                    st.plotly_chart(fig_box, use_container_width=True)
+            else:
+                st.info("No suitable metric column detected for plotting.")
+    else:
+        st.warning(f"Grid search DB not found at {resolved_grid!s}; GridSearch may be limited.")
 
 else:
     st.write(f"Showing plots: {n_rows} x {n_cols} (source: {data_source})")

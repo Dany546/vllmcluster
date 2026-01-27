@@ -124,17 +124,19 @@ class TSNEExtractor(TransformerMixin):
     This is an approximation but provides a deterministic transform behavior.
     """
 
-    def __init__(self, n_components: int = 2, perplexity: float = 30.0):
+    def __init__(self, n_components: int = 2, perplexity: float = 30.0, method: str = "barnes_hut"):
         self.n_components = int(n_components)
         self.perplexity = float(perplexity)
+        self.method = method
         self._X_train: Optional[np.ndarray] = None
         self._emb_train: Optional[np.ndarray] = None
         self._nn: Optional[NearestNeighbors] = None
+        self.init: Optional[str] = "pca"
 
     def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None):
         self._X_train = X
-        self._emb_train = TSNE(n_components=self.n_components, perplexity=self.perplexity, init="random", learning_rate="auto").fit_transform(X)
-        self._nn = NearestNeighbors(n_neighbors=min(5, max(1, X.shape[0]))).fit(X)
+        self._emb_train = TSNE(n_components=self.n_components, perplexity=self.perplexity, init=self.init, method=self.method, learning_rate="auto").fit_transform(X)
+        # self._nn = NearestNeighbors(n_neighbors=min(5, max(5, X.shape[0]))).fit(X)
         return self
 
     def transform(self, X: np.ndarray):

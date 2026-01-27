@@ -79,7 +79,7 @@ def cluster(args):
         torch.manual_seed(42)
         dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=256,
+            batch_size=128,
             shuffle=False,
             num_workers=8,
             drop_last=False,
@@ -122,7 +122,7 @@ def cluster(args):
             if not getattr(args, "cluster", False):
                 continue
 
-        clustering_layer.distance_matrix_db(dataloader)
+        clustering_layer.distance_matrix_db(dataloader, eval_mode=getattr(args, 'eval_mode', False), eval_on_gpu=getattr(args, 'eval_on_gpu', False))
 
         if run and False:
             conn = sqlite3.connect(clustering_layer.embeddings_db)
@@ -211,6 +211,16 @@ def parse_args():
         "--save-raw",
         action="store_true",
         help="Run model to save raw YOLO head predictions into embeddings DB",
+    )
+    parser.add_argument(
+        "--eval-mode",
+        action="store_true",
+        help="Compute evaluation-mode distances (prediction vs prediction) and write to a separate '-eval' DB",
+    )
+    parser.add_argument(
+        "--eval-on-gpu",
+        action="store_true",
+        help="When using --eval-mode, compute evaluation metrics on GPU if available (fallbacks to CPU on OOM)",
     )
     parser.add_argument(
         "--store-preds",
